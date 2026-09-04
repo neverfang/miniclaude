@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "miniclaude"
+version = "0.1.0"
+description = "A step-by-step educational coding agent: stage one ReAct"
+requires-python = ">=3.11"
+dependencies = [
+  "langchain-core>=1.0,<2",
+  "langchain-openai>=1.0,<2",
+  "typer>=0.16,<1",
+  "rich>=13.9,<15",
+  "python-dotenv>=1.0,<2",
+  "regex>=2024.11.6,<2027",
+]
+
+[project.scripts]
+miniclaude = "miniclaude.cli.app:app"
+
+[dependency-groups]
+dev = ["pytest>=8.3,<10", "ruff>=0.11,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/miniclaude"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+cache_dir = ".miniclaude/cache/pytest"
+markers = ["live: opt-in real model calls and execution of generated code"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+cache-dir = ".miniclaude/cache/ruff"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
