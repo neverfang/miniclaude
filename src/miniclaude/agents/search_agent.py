@@ -6,6 +6,7 @@ from collections.abc import Callable
 from langchain_core.tools import StructuredTool
 
 from miniclaude.core.agent import ChatModel, stream_agent_events
+from miniclaude.graph.memory import prompt_memory_fields
 from miniclaude.graph.state import MiniclaudeGraphState, SourceItem
 from miniclaude.prompts.stage3 import SEARCH_AGENT_PROMPT
 
@@ -27,14 +28,13 @@ def run_search_agent(
     seen_urls = set()
     summary = ""
     error = ""
-    task = json.dumps(
-        {
-            "user_task": state["task"],
-            "instruction": instruction,
-            "existing_research": state.get("research_notes", "")[:4000],
-        },
-        ensure_ascii=False,
-    )
+    task_data = {
+        "user_task": state["task"],
+        "instruction": instruction,
+        "existing_research": state.get("research_notes", "")[:4000],
+    }
+    task_data.update(prompt_memory_fields(state))
+    task = json.dumps(task_data, ensure_ascii=False)
     for event in stream_agent_events(
         task,
         workspace=state["runtime"].workspace,

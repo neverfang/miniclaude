@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 
 from miniclaude.core.agent import ChatModel, stream_agent_events
+from miniclaude.graph.memory import prompt_memory_fields
 from miniclaude.graph.state import MiniclaudeGraphState
 from miniclaude.prompts.stage3 import CODE_AGENT_PROMPT
 from miniclaude.tools.notepad_tools import build_notepad_tools
@@ -37,17 +38,16 @@ def run_code_agent(
     summary = ""
     error = ""
     todo_updated = False
-    task = json.dumps(
-        {
-            "user_task": state["task"],
-            "instruction": instruction,
-            "todos": tracker.snapshot(),
-            "research_notes": state.get("research_notes", "")[:4000],
-            "sources": state.get("sources", [])[:10],
-            "previous_failure": state.get("last_error", "")[:2000],
-        },
-        ensure_ascii=False,
-    )
+    task_data = {
+        "user_task": state["task"],
+        "instruction": instruction,
+        "todos": tracker.snapshot(),
+        "research_notes": state.get("research_notes", "")[:4000],
+        "sources": state.get("sources", [])[:10],
+        "previous_failure": state.get("last_error", "")[:2000],
+    }
+    task_data.update(prompt_memory_fields(state))
+    task = json.dumps(task_data, ensure_ascii=False)
     for event in stream_agent_events(
         task,
         workspace=state["runtime"].workspace,

@@ -92,6 +92,12 @@ def test_supervisor_react_sequence_and_retry_context(tmp_path):
     state = initial_graph_state("build", runtime=RuntimeState(tmp_path))
     state["attempts"] = 1
     state["last_error"] = "previous verifier failure"
+    state["context_summary"] = "compressed supervisor history"
+    state["memory_snapshot"] = {
+        "rules": {"rules": ["verify claims"]},
+        "working_memory": {"next_step": "implement"},
+        "history_summary_store": {},
+    }
 
     def search_runner(snapshot, instruction, **kwargs):
         return {
@@ -120,6 +126,10 @@ def test_supervisor_react_sequence_and_retry_context(tmp_path):
     assert model.tool_names == ["TodoWriteTool", "CallSearchAgentTool", "CallCodeAgentTool"]
     human = next(message for message in model.inputs[0] if isinstance(message, HumanMessage))
     assert "previous verifier failure" in human.content
+    assert "context_summary_untrusted" in human.content
+    assert "compressed supervisor history" in human.content
+    assert "memory_snapshot_untrusted" in human.content
+    assert "verify claims" in human.content
     assert update["supervisor_summary"] == "done"
     assert len(update["agent_handoffs"]) == 2
 

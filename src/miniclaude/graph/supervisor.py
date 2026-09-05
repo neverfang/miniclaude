@@ -10,6 +10,7 @@ from miniclaude.agents.code_agent import run_code_agent
 from miniclaude.agents.search_agent import run_search_agent
 from miniclaude.core.agent import ChatModel, stream_agent_events
 from miniclaude.core.state import ToolError
+from miniclaude.graph.memory import prompt_memory_fields
 from miniclaude.graph.state import AgentHandoff, MiniclaudeGraphState, SourceItem
 from miniclaude.prompts.stage3 import SUPERVISOR_PROMPT
 from miniclaude.tools.todo_tools import TodoTracker
@@ -207,17 +208,16 @@ def make_supervisor_node(
             code_runner=code_runner,
             emit=emit,
         )
-        context = json.dumps(
-            {
-                "task": state["task"],
-                "attempt": state["attempts"] + 1,
-                "shell_enabled": state["runtime"].allow_shell,
-                "previous_verifier_failure": state.get("last_error", ""),
-                "existing_research": state.get("research_notes", "")[:3000],
-                "previous_handoffs": state.get("agent_handoffs", [])[-6:],
-            },
-            ensure_ascii=False,
-        )[: state["runtime"].max_output_chars]
+        context_data = {
+            "task": state["task"],
+            "attempt": state["attempts"] + 1,
+            "shell_enabled": state["runtime"].allow_shell,
+            "previous_verifier_failure": state.get("last_error", ""),
+            "existing_research": state.get("research_notes", "")[:3000],
+            "previous_handoffs": state.get("agent_handoffs", [])[-6:],
+        }
+        context_data.update(prompt_memory_fields(state))
+        context = json.dumps(context_data, ensure_ascii=False)[: state["runtime"].max_output_chars]
         captured_messages = []
         summary = ""
         loop_error = ""

@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 
 from miniclaude.core.state import ToolError
+from miniclaude.graph.context import sanitize_text
 from miniclaude.graph.state import LayeredMemory, MiniclaudeGraphState
 from miniclaude.tools.history_tools import read_history_summary
 from miniclaude.tools.notepad_tools import build_notepad_tools
@@ -78,9 +79,7 @@ def _safe_notepad(state: MiniclaudeGraphState) -> dict[str, object]:
     }
 
 
-def build_layered_memory(
-    state: MiniclaudeGraphState, *, node: str = "graph"
-) -> LayeredMemory:
+def build_layered_memory(state: MiniclaudeGraphState, *, node: str = "graph") -> LayeredMemory:
     """Build a fresh three-layer memory snapshot without mutating graph state."""
     history = _safe_history(state)
     notepad = _safe_notepad(state)
@@ -123,3 +122,18 @@ def build_layered_memory(
 def format_layered_memory_for_prompt(memory: LayeredMemory) -> str:
     """Serialize one snapshot predictably for an LLM input."""
     return json.dumps(memory, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def prompt_memory_fields(state: MiniclaudeGraphState) -> dict[str, str]:
+    """Project optional Stage 4 memory into bounded, explicitly untrusted fields."""
+    fields: dict[str, str] = {}
+    summary = sanitize_text(state.get("context_summary", "")).strip()
+    if summary:
+        fields["context_summary_untrusted"] = summary[:2_000]
+    snapshot = state.get("memory_snapshot")
+    if snapshot:
+        rendered = sanitize_text(
+            json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+        )
+        fields["memory_snapshot_untrusted"] = rendered[:4_000]
+    return fields

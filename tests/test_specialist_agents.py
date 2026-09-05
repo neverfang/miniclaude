@@ -52,6 +52,12 @@ def test_search_agent_has_only_web_search_and_collects_sources(tmp_path):
         ]
     )
     state = initial_graph_state("research", runtime=RuntimeState(tmp_path))
+    state["context_summary"] = "compressed research history"
+    state["memory_snapshot"] = {
+        "rules": {},
+        "working_memory": {"research_notes": "prior evidence"},
+        "history_summary_store": {},
+    }
 
     result = run_search_agent(
         state,
@@ -66,6 +72,11 @@ def test_search_agent_has_only_web_search_and_collects_sources(tmp_path):
     assert result["queries"] == ["facts", "more facts"]
     assert result["sources"][0]["url"] == "https://example.com/docs"
     assert len(result["messages"]) == 6
+    human = next(message for message in model.inputs[0] if isinstance(message, HumanMessage))
+    assert "context_summary_untrusted" in human.content
+    assert "compressed research history" in human.content
+    assert "memory_snapshot_untrusted" in human.content
+    assert "prior evidence" in human.content
 
 
 def test_code_agent_has_implementation_tools_and_updates_todo_and_notepad(tmp_path):
@@ -95,6 +106,12 @@ def test_code_agent_has_implementation_tools_and_updates_todo_and_notepad(tmp_pa
     state["sources"] = [
         {"title": "Docs", "url": "https://example.com", "content": "facts", "score": 1.0}
     ]
+    state["context_summary"] = "compressed implementation history"
+    state["memory_snapshot"] = {
+        "rules": {},
+        "working_memory": {"important_files": ["app.py"]},
+        "history_summary_store": {"notepad": "keep tests green"},
+    }
 
     result = run_code_agent(state, "create output", model=model)
 
@@ -109,6 +126,28 @@ def test_code_agent_has_implementation_tools_and_updates_todo_and_notepad(tmp_pa
     human = next(message for message in model.inputs[0] if isinstance(message, HumanMessage))
     assert "official facts" in human.content
     assert "https://example.com" in human.content
+    assert "context_summary_untrusted" in human.content
+    assert "compressed implementation history" in human.content
+    assert "memory_snapshot_untrusted" in human.content
+    assert "app.py" in human.content
+
+
+def test_specialist_prompt_omits_empty_or_absent_stage_four_memory(tmp_path):
+    model = SequenceModel([AIMessage(content="No research needed")])
+    state = initial_graph_state("research", runtime=RuntimeState(tmp_path))
+    state.pop("context_summary")
+    state.pop("memory_snapshot")
+    web_tool = StructuredTool.from_function(
+        lambda query: {"ok": True, "query": query, "results": []},
+        name="WebSearchTool",
+        description="Return deterministic research.",
+    )
+
+    run_search_agent(state, "inspect", model=model, web_search_tool=web_tool)
+
+    human = next(message for message in model.inputs[0] if isinstance(message, HumanMessage))
+    assert "context_summary_untrusted" not in human.content
+    assert "memory_snapshot_untrusted" not in human.content
 
 
 def test_specialists_report_empty_or_exhausted_model_runs(tmp_path):
