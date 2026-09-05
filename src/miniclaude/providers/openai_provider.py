@@ -20,12 +20,13 @@ def create_model(*, env_file: Path | None = None) -> ChatOpenAI:
     api_key = setting("OPENAI_API_KEY")
     model_name = setting("OPENAI_MODEL")
     base_url = setting("OPENAI_BASE_URL")
+    thinking = setting("OPENAI_THINKING").lower()
     if not api_key:
         raise ValueError("Set OPENAI_API_KEY in the environment or .env")
     if not model_name:
         raise ValueError("Set OPENAI_MODEL to a model supporting tool calls")
-    if base_url:
-        parsed = urlparse(base_url)
+    parsed = urlparse(base_url) if base_url else None
+    if parsed is not None:
         if (
             parsed.scheme not in {"https", "http"}
             or not parsed.hostname
@@ -37,6 +38,15 @@ def create_model(*, env_file: Path | None = None) -> ChatOpenAI:
             raise ValueError("OPENAI_BASE_URL must be an http(s) URL without credentials or query")
         if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
             raise ValueError("Use HTTPS for non-local model endpoints")
+    if thinking and thinking != "disabled":
+        raise ValueError(
+            "OPENAI_THINKING currently supports only 'disabled'; reasoning_content "
+            "round-tripping is not available"
+        )
+    deepseek_official = parsed is not None and (
+        parsed.hostname == "api.deepseek.com" or parsed.hostname.endswith(".deepseek.com")
+    )
+    extra_body = {"thinking": {"type": "disabled"}} if thinking or deepseek_official else None
     # Use Chat Completions for compatible providers, with bounded retries/timeout.
     return ChatOpenAI(
         model=model_name,
@@ -45,4 +55,5 @@ def create_model(*, env_file: Path | None = None) -> ChatOpenAI:
         timeout=60,
         max_retries=1,
         use_responses_api=False,
+        extra_body=extra_body,
     )

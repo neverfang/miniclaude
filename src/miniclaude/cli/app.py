@@ -1,6 +1,5 @@
 """Typer entry point; presentation stays outside the Agent loop."""
 
-import json
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
@@ -9,42 +8,24 @@ import typer
 from rich.console import Console
 from rich.text import Text
 
-from miniclaude.core.agent import stream_agent_events
+from miniclaude.cli.render import render_event
+from miniclaude.core.agent import stream_workflow_events
 from miniclaude.providers.openai_provider import create_model
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
 
-def _show(console: Console, event: dict):
-    kind = event["type"]
-    if kind == "run_start":
-        console.print(Text(f"Workspace: {event['workspace']}"))
-    elif kind == "model_start":
-        console.print(Text(f"[model] iteration {event['iteration']}"))
-    elif kind == "tool_call":
-        args = dict(event["args"])
-        for key in ("content", "old_text", "new_text"):
-            if key in args:
-                args[key] = f"<{len(str(args[key]))} characters>"
-        console.print(Text(f"[tool] {event['name']} {json.dumps(args, ensure_ascii=False)[:1500]}"))
-    elif kind == "tool_result":
-        result = json.dumps(event["result"], ensure_ascii=False)
-        console.print(Text(f"[result] {event['name']}: {result[:2000]}"))
-        if len(result) > 2000:
-            console.print(Text("[display truncated; the model received the bounded tool result]"))
-    elif kind == "final_answer":
-        console.print(Text("\n[answer] " + event["content"]))
-    elif kind == "error":
-        console.print(Text(f"[error:{event['code']}] {event['message']}", style="red"))
-
-
 @app.command()
 def main(
-    task: Annotated[str, typer.Argument(help="Task for the stage-one ReAct agent.")],
+    task: Annotated[str, typer.Argument(help="Task for the stage-two coding workflow.")],
     workspace: Annotated[
         Path | None, typer.Option("--workspace", "-w", help="Generated files go here.")
     ] = None,
     max_loops: Annotated[int, typer.Option(min=1, max=100, help="Maximum model calls.")] = 10,
+    max_attempts: Annotated[
+        int,
+        typer.Option(min=1, max=10, help="Maximum Plan-Execute-Verify attempts."),
+    ] = 3,
     allow_shell: Annotated[
         bool, typer.Option(help="Allow unsandboxed local commands. Trusted tasks only.")
     ] = False,
@@ -52,7 +33,7 @@ def main(
         Path | None, typer.Option(help="Explicit .env file; default is startup directory/.env.")
     ] = None,
 ):
-    """Run a small coding agent. No task is run without an explicit task argument."""
+    """Run the Plan-Execute-Verify coding workflow."""
     console = Console(highlight=False)
     if not task.strip():
         console.print(Text("Task must not be empty", style="red"))
@@ -70,13 +51,21 @@ def main(
         console.print(
             Text("WARNING: Shell is enabled. The workspace is NOT a sandbox.", style="yellow")
         )
-    failed = False
+    failed = True
+    saw_final = False
     try:
-        for event in stream_agent_events(
-            task, workspace=workspace, max_loops=max_loops, allow_shell=allow_shell, model=model
+        for event in stream_workflow_events(
+            task,
+            workspace=workspace,
+            max_loops=max_loops,
+            max_attempts=max_attempts,
+            allow_shell=allow_shell,
+            model=model,
         ):
-            _show(console, event)
-            failed |= event["type"] == "error"
+            render_event(console, event)
+            if event["type"] == "final":
+                saw_final = True
+                failed = not event["passed"]
     except KeyboardInterrupt:
         console.print(Text("Interrupted. Existing workspace files were retained."))
         raise typer.Exit(130) from None
@@ -88,5 +77,5 @@ def main(
             )
         )
         raise typer.Exit(1) from None
-    if failed:
+    if failed or not saw_final:
         raise typer.Exit(1)

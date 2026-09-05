@@ -12,6 +12,11 @@ def pytest_addoption(parser):
         action="store_true",
         help="Call model and run generated snake logic (no GUI)",
     )
+    parser.addoption(
+        "--run-live-stage2",
+        action="store_true",
+        help="Call the stage-two graph and run generated Game of Life code",
+    )
 
 
 def pytest_configure(config):

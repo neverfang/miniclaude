@@ -66,6 +66,34 @@ def test_multiple_calls_preserve_order_and_ids(tmp_path):
     assert json.loads(model.inputs[1][-1].content)["content"] == "1: a"
 
 
+def test_react_loop_can_capture_the_actual_message_transcript(tmp_path):
+    model = ScriptedModel(
+        [
+            call("FileWriteTool", {"file_path": "note.txt", "content": "hello"}),
+            AIMessage(content="done"),
+        ]
+    )
+    captured = []
+
+    list(
+        stream_agent_events(
+            "write a note",
+            workspace=tmp_path,
+            model=model,
+            captured_messages=captured,
+        )
+    )
+
+    assert [type(message) for message in captured] == [
+        SystemMessage,
+        HumanMessage,
+        AIMessage,
+        ToolMessage,
+        AIMessage,
+    ]
+    assert captured[3].tool_call_id == "call-1"
+
+
 @pytest.mark.parametrize(
     "name,args", [("unknown", {}), ("FileReadTool", {}), ("FileReadTool", {"file_path": "missing"})]
 )
@@ -177,3 +205,86 @@ def test_invalid_loop_inputs(tmp_path, task, loops):
         list(
             stream_agent_events(task, workspace=tmp_path, model=ScriptedModel([]), max_loops=loops)
         )
+
+
+def test_workflow_stream_normalizes_updates_and_nested_react_events(tmp_path):
+    from miniclaude.core.agent import stream_workflow_events
+
+    class FakeWorkflow:
+        def __init__(self):
+            self.calls = []
+
+        def stream(self, state, **kwargs):
+            self.calls.append((state, kwargs))
+            yield (
+                "updates",
+                {
+                    "planner": {
+                        "plan_summary": "Test, implement, verify",
+                        "todos": [
+                            {
+                                "id": "tests",
+                                "content": "Write tests",
+                                "status": "in_progress",
+                                "note": "",
+                            }
+                        ],
+                        "acceptance_criteria": ["tests pass"],
+                        "verification_commands": ["pytest -q"],
+                    }
+                },
+            )
+            yield (
+                "custom",
+                {"type": "actor_event", "event": {"type": "model_start", "iteration": 1}},
+            )
+            yield "updates", {"actor": {"last_actor_summary": "implemented", "todos": []}}
+            yield (
+                "updates",
+                {
+                    "verifier": {
+                        "attempts": 1,
+                        "passed": True,
+                        "verification_reason": "all checks pass",
+                        "verification_checks": [
+                            {"name": "tests pass", "passed": True, "detail": "ok"}
+                        ],
+                        "verification_results": [
+                            {
+                                "command": "pytest -q",
+                                "ok": True,
+                                "exit_code": 0,
+                                "stdout": "1 passed",
+                                "stderr": "",
+                            }
+                        ],
+                    }
+                },
+            )
+            yield "updates", {"final": {"final_answer": "verified"}}
+
+    workflow = FakeWorkflow()
+    events = list(
+        stream_workflow_events(
+            "build feature",
+            workspace=tmp_path,
+            model=object(),
+            workflow=workflow,
+            max_attempts=2,
+        )
+    )
+
+    assert [event["type"] for event in events] == [
+        "run_start",
+        "planner",
+        "react_event",
+        "actor",
+        "verifier",
+        "final",
+    ]
+    assert events[1]["acceptance_criteria"] == ["tests pass"]
+    assert events[4]["reason"] == "all checks pass"
+    assert events[5] == {"type": "final", "passed": True, "content": "verified"}
+    state, options = workflow.calls[0]
+    assert state["max_attempts"] == 2
+    assert options["stream_mode"] == ["updates", "custom"]

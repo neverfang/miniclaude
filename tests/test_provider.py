@@ -11,7 +11,13 @@ from miniclaude.providers.openai_provider import create_model
 @pytest.fixture(autouse=True)
 def no_real_config(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    for key in ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
+    for key in (
+        "OPENAI_API_KEY",
+        "OPENAI_MODEL",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "OPENAI_THINKING",
+    ):
         monkeypatch.delenv(key, raising=False)
 
 
@@ -52,6 +58,36 @@ def test_does_not_search_parent_dotenv(tmp_path, monkeypatch):
 def test_missing_explicit_env_file_is_reported(tmp_path):
     with pytest.raises(ValueError, match="env"):
         create_model(env_file=tmp_path / "absent.env")
+
+
+def test_deepseek_official_endpoint_disables_thinking_for_tool_roundtrips(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("OPENAI_MODEL", "deepseek-model")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.deepseek.com")
+
+    model = create_model()
+
+    assert model.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_compatible_gateway_can_explicitly_disable_thinking(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("OPENAI_MODEL", "deepseek-model")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.example/v1")
+    monkeypatch.setenv("OPENAI_THINKING", "disabled")
+
+    model = create_model()
+
+    assert model.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_invalid_thinking_setting_is_rejected(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setenv("OPENAI_MODEL", "test-model")
+    monkeypatch.setenv("OPENAI_THINKING", "sometimes")
+
+    with pytest.raises(ValueError, match="OPENAI_THINKING"):
+        create_model()
 
 
 def test_openai_compatible_wire_protocol_with_real_tool_execution(tmp_path):

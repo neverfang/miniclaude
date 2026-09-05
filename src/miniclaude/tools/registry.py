@@ -9,14 +9,41 @@ from miniclaude.tools.file_tools import edit_file, read_file, write_file
 from miniclaude.tools.grep_tool import grep
 
 
-def build_tools(state: RuntimeState) -> list[StructuredTool]:
-    # Explicit signatures expose only model arguments, never RuntimeState.
+def _read_tool(state: RuntimeState) -> StructuredTool:
     def read(file_path: str, offset: int = 0, limit: int = 2000) -> dict:
         """Read UTF-8 text at a relative path with line numbers; offset is zero-based.
 
         Read before modifying an existing file. Max limit 2000 lines; outputs may be truncated.
         """
         return read_file(state, file_path, offset, limit)
+
+    return StructuredTool.from_function(read, name="FileReadTool")
+
+
+def _grep_tool(state: RuntimeState) -> StructuredTool:
+    def search(
+        pattern: str,
+        path: str = ".",
+        glob: str = "*",
+        head_limit: int = 50,
+        ignore_case: bool = False,
+    ) -> dict:
+        """Search UTF-8 text using regex, returning paths, line numbers and bounded matches.
+
+        Search path is workspace-relative. Secrets, environment and Git folders are skipped.
+        """
+        return grep(state, pattern, path, glob, head_limit, ignore_case)
+
+    return StructuredTool.from_function(search, name="GrepTool")
+
+
+def build_readonly_tools(state: RuntimeState) -> list[StructuredTool]:
+    """Build workspace-inspection tools that cannot modify files or run commands."""
+    return [_read_tool(state), _grep_tool(state)]
+
+
+def build_tools(state: RuntimeState) -> list[StructuredTool]:
+    # Explicit signatures expose only model arguments, never RuntimeState.
 
     def write(file_path: str, content: str) -> dict:
         """Create a UTF-8 file. Before overwriting an existing file, read it with FileReadTool.
@@ -32,19 +59,6 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
         """
         return edit_file(state, file_path, old_text, new_text)
 
-    def search(
-        pattern: str,
-        path: str = ".",
-        glob: str = "*",
-        head_limit: int = 50,
-        ignore_case: bool = False,
-    ) -> dict:
-        """Search UTF-8 text using regex, returning paths, line numbers and bounded matches.
-
-        Search path is workspace-relative. Secrets, environment and Git folders are skipped.
-        """
-        return grep(state, pattern, path, glob, head_limit, ignore_case)
-
     def bash(command: str, timeout_seconds: float | None = None) -> dict:
         """Run a noninteractive command in the workspace (PowerShell on Windows, sh on POSIX).
 
@@ -54,14 +68,11 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
         return run_bash(state, command, timeout_seconds)
 
     return [
-        StructuredTool.from_function(func, name=name)
-        for name, func in (
-            ("FileReadTool", read),
-            ("FileWriteTool", write),
-            ("FileEditTool", edit),
-            ("GrepTool", search),
-            ("BashTool", bash),
-        )
+        _read_tool(state),
+        StructuredTool.from_function(write, name="FileWriteTool"),
+        StructuredTool.from_function(edit, name="FileEditTool"),
+        _grep_tool(state),
+        StructuredTool.from_function(bash, name="BashTool"),
     ]
 
 

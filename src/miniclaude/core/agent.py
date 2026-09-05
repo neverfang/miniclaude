@@ -6,7 +6,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 
 from miniclaude.core.prompts import ACTOR_PROMPT
 from miniclaude.core.state import RuntimeState
@@ -39,6 +40,10 @@ def stream_agent_events(
     max_loops: int = 10,
     allow_shell: bool = False,
     model: ChatModel | None = None,
+    runtime: RuntimeState | None = None,
+    tools: list[StructuredTool] | None = None,
+    system_prompt: str = ACTOR_PROMPT,
+    captured_messages: list[BaseMessage] | None = None,
 ) -> Iterator[dict]:
     """Stream execution events; a final answer is not independent verification.
 
@@ -48,17 +53,25 @@ def stream_agent_events(
     if not task.strip() or not 1 <= max_loops <= 100:
         raise ValueError("task must be nonempty and max_loops must be between 1 and 100")
     model = create_model() if model is None else model
-    state = RuntimeState(workspace=workspace, allow_shell=allow_shell)
-    tools = build_tools(state)
+    state = runtime or RuntimeState(workspace=workspace, allow_shell=allow_shell)
+    if state.workspace != Path(workspace).resolve():
+        raise ValueError("workspace and runtime.workspace must match")
+    active_tools = build_tools(state) if tools is None else tools
     context = (
         f"Workspace: {state.workspace}\n"
-        f"Shell: {'PowerShell' if os.name == 'nt' else 'sh'}; enabled={allow_shell}\n"
+        f"Shell: {'PowerShell' if os.name == 'nt' else 'sh'}; enabled={state.allow_shell}\n"
         "Python executable command: python\n"
     )
-    messages = [SystemMessage(content=ACTOR_PROMPT + "\n" + context), HumanMessage(content=task)]
-    yield {"type": "run_start", "workspace": str(state.workspace), "allow_shell": allow_shell}
+    messages = [SystemMessage(content=system_prompt + "\n" + context), HumanMessage(content=task)]
+    if captured_messages is not None:
+        captured_messages.extend(messages)
+    yield {
+        "type": "run_start",
+        "workspace": str(state.workspace),
+        "allow_shell": state.allow_shell,
+    }
     try:
-        agent = model.bind_tools(tools)
+        agent = model.bind_tools(active_tools)
     except Exception as exc:
         yield {
             "type": "error",
@@ -108,6 +121,8 @@ def stream_agent_events(
         if content:
             yield {"type": "ai_message", "content": content}
         messages.append(response)
+        if captured_messages is not None:
+            captured_messages.append(response)
         if not calls:
             if not content.strip():
                 yield {
@@ -125,17 +140,110 @@ def stream_agent_events(
                 "args": call["args"],
                 "id": call["id"],
             }
-            result = execute_tool(tools, call["name"], call["args"])
-            messages.append(
-                ToolMessage(
-                    content=json.dumps(result, ensure_ascii=False),
-                    tool_call_id=call["id"],
-                    name=call["name"],
-                )
+            result = execute_tool(active_tools, call["name"], call["args"])
+            tool_message = ToolMessage(
+                content=json.dumps(result, ensure_ascii=False),
+                tool_call_id=call["id"],
+                name=call["name"],
             )
+            messages.append(tool_message)
+            if captured_messages is not None:
+                captured_messages.append(tool_message)
             yield {"type": "tool_result", "name": call["name"], "id": call["id"], "result": result}
     yield {
         "type": "error",
         "code": "max_loops",
         "message": f"Stopped after {max_loops} model calls without a final answer",
     }
+
+
+def stream_workflow_events(
+    task: str,
+    *,
+    workspace: Path,
+    max_loops: int = 10,
+    max_attempts: int = 3,
+    allow_shell: bool = False,
+    model: ChatModel | None = None,
+    workflow=None,
+) -> Iterator[dict]:
+    """Build and stream the stage-two workflow as stable application events."""
+    if not task.strip() or not 1 <= max_loops <= 100 or not 1 <= max_attempts <= 10:
+        raise ValueError("invalid task, max_loops, or max_attempts")
+
+    # Local imports avoid a module cycle because graph nodes reuse stream_agent_events.
+    from miniclaude.graph.state import initial_graph_state
+    from miniclaude.graph.workflow import build_workflow
+
+    configured_model = create_model() if model is None else model
+    runtime = RuntimeState(workspace=workspace, allow_shell=allow_shell)
+    state = initial_graph_state(task, runtime=runtime, max_attempts=max_attempts)
+    compiled = workflow or build_workflow(
+        planner_model=configured_model,
+        actor_model=configured_model,
+        verifier_model=configured_model,
+        actor_max_loops=max_loops,
+    )
+
+    yield {
+        "type": "run_start",
+        "workspace": str(runtime.workspace),
+        "allow_shell": runtime.allow_shell,
+    }
+    completed_attempts = 0
+    last_passed = False
+    for mode, chunk in compiled.stream(
+        state,
+        stream_mode=["updates", "custom"],
+        config={"recursion_limit": max_attempts * 4 + 4},
+    ):
+        if mode == "custom":
+            kind = chunk.get("type")
+            if kind in {"actor_event", "verifier_event"}:
+                nested = chunk.get("event", {})
+                if nested.get("type") not in {"run_start", "final_answer"}:
+                    yield {
+                        "type": "react_event",
+                        "role": "actor" if kind == "actor_event" else "verifier",
+                        "event": nested,
+                    }
+            continue
+        if mode != "updates" or not isinstance(chunk, dict):
+            continue
+        for node, update in chunk.items():
+            if not isinstance(update, dict):
+                continue
+            if node == "planner":
+                yield {
+                    "type": "planner",
+                    "attempt": completed_attempts + 1,
+                    "plan_summary": update.get("plan_summary", ""),
+                    "todos": update.get("todos", []),
+                    "acceptance_criteria": update.get("acceptance_criteria", []),
+                    "verification_commands": update.get("verification_commands", []),
+                }
+            elif node == "actor":
+                yield {
+                    "type": "actor",
+                    "attempt": completed_attempts + 1,
+                    "summary": update.get("last_actor_summary", ""),
+                    "ok": not bool(update.get("last_error")),
+                    "todos": update.get("todos", []),
+                }
+            elif node == "verifier":
+                completed_attempts = update.get("attempts", completed_attempts + 1)
+                last_passed = bool(update.get("passed"))
+                yield {
+                    "type": "verifier",
+                    "attempt": completed_attempts,
+                    "passed": last_passed,
+                    "reason": update.get("verification_reason", update.get("last_error", "")),
+                    "checks": update.get("verification_checks", []),
+                    "results": update.get("verification_results", []),
+                }
+            elif node == "final":
+                yield {
+                    "type": "final",
+                    "passed": last_passed,
+                    "content": update.get("final_answer", ""),
+                }

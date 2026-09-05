@@ -1,0 +1,241 @@
+"""Rich terminal rendering for normalized miniclaude events."""
+
+import json
+
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.text import Text
+
+DISPLAY_LIMIT = 2000
+
+
+def _bounded(value: object, limit: int = DISPLAY_LIMIT) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... display truncated - original {len(text)} characters"
+
+
+def _section(label: str, value: object, *, label_style: str = "bold") -> Group:
+    body = value if isinstance(value, (Text, Group)) else Text(_bounded(value))
+    return Group(Text(label, style=label_style), body)
+
+
+def _stack(*items) -> Group:
+    spaced = []
+    for item in items:
+        if item is None:
+            continue
+        if spaced:
+            spaced.append(Text(""))
+        spaced.append(item)
+    return Group(*spaced)
+
+
+def _bullet_lines(values: list, *, empty: str = "None") -> Text:
+    if not values:
+        return Text(empty, style="dim")
+    lines = Text()
+    for index, value in enumerate(values):
+        if index:
+            lines.append("\n")
+        lines.append("- ", style="blue")
+        lines.append(_bounded(value))
+    return lines
+
+
+def _todo_lines(todos: list[dict]) -> Text:
+    if not todos:
+        return Text("No todos", style="dim")
+    icons = {
+        "pending": ("[ ]", "dim"),
+        "in_progress": ("[~]", "cyan"),
+        "completed": ("[ok]", "green"),
+        "blocked": ("[x]", "red"),
+    }
+    lines = Text()
+    for index, todo in enumerate(todos):
+        if index:
+            lines.append("\n")
+        icon, style = icons.get(str(todo.get("status")), ("-", "blue"))
+        lines.append(f"{icon} ", style=style)
+        lines.append(str(todo.get("content", todo.get("id", "Unnamed todo"))))
+        note = todo.get("note")
+        if note:
+            lines.append(f" - {_bounded(note, 400)}", style="dim")
+    return lines
+
+
+def _check_lines(checks: list[dict]) -> Text:
+    if not checks:
+        return Text("No checks", style="dim")
+    lines = Text()
+    for index, check in enumerate(checks):
+        if index:
+            lines.append("\n")
+        passed = bool(check.get("passed"))
+        lines.append("[ok] " if passed else "[x] ", style="green" if passed else "red")
+        lines.append(str(check.get("name", "Unnamed check")))
+        detail = check.get("detail")
+        if detail:
+            lines.append(f" - {_bounded(detail, 500)}", style="dim")
+    return lines
+
+
+def _verification_results(results: list[dict]) -> Group | Text:
+    if not results:
+        return Text("No command results", style="dim")
+    sections = []
+    for result in results:
+        ok = bool(result.get("ok"))
+        header = Text()
+        header.append("[ok] " if ok else "[x] ", style="green" if ok else "red")
+        header.append(str(result.get("command", "Unknown command")))
+        exit_code = result.get("exit_code")
+        if exit_code is not None:
+            header.append(f"  (exit {exit_code})", style="dim")
+        details = [header]
+        for key in ("stdout", "stderr"):
+            value = result.get(key)
+            if value:
+                details.append(_section(key, value))
+        if sections:
+            sections.append(Text(""))
+        sections.append(Group(*details))
+    return Group(*sections)
+
+
+def _tool_call(event: dict) -> Panel:
+    args = event.get("args", {})
+    values = args.items() if isinstance(args, dict) else [("arguments", args)]
+    sections = [_section(str(key), value, label_style="bold magenta") for key, value in values]
+    return Panel(
+        Group(*sections) if sections else Text("No arguments", style="dim"),
+        title=Text(f"Tool Call - {event.get('name', 'unknown')}"),
+        border_style="magenta",
+        padding=(0, 1),
+    )
+
+
+def _tool_result(event: dict) -> Panel:
+    result = event.get("result", {})
+    ok = bool(result.get("ok")) if isinstance(result, dict) else False
+    values = result.items() if isinstance(result, dict) else [("result", result)]
+    sections = [
+        _section(str(key), value, label_style="bold green" if ok else "bold red")
+        for key, value in values
+        if value not in (None, "")
+    ]
+    return Panel(
+        Group(*sections) if sections else Text("No result details", style="dim"),
+        title=Text(f"Tool Result - {event.get('name', 'unknown')}"),
+        border_style="green" if ok else "red",
+        padding=(0, 1),
+    )
+
+
+def _planner(event: dict) -> Panel:
+    body = _stack(
+        Text(str(event.get("plan_summary", "No plan summary"))),
+        _section("Todos", _todo_lines(event.get("todos", []))),
+        _section("Acceptance criteria", _bullet_lines(event.get("acceptance_criteria", []))),
+        _section("Verification commands", _bullet_lines(event.get("verification_commands", []))),
+    )
+    return Panel(
+        body,
+        title=Text(f"[planner] - Attempt {event.get('attempt', '?')}"),
+        border_style="blue",
+        padding=(0, 1),
+    )
+
+
+def _actor(event: dict) -> Panel:
+    status = "COMPLETE" if event.get("ok") else "INCOMPLETE"
+    body = _stack(
+        Text(str(event.get("summary", "No actor summary"))),
+        _section("Todos", _todo_lines(event.get("todos", []))),
+    )
+    return Panel(
+        body,
+        title=Text(f"[actor] - Attempt {event.get('attempt', '?')} - {status}"),
+        border_style="cyan" if event.get("ok") else "yellow",
+        padding=(0, 1),
+    )
+
+
+def _verifier(event: dict) -> Panel:
+    passed = bool(event.get("passed"))
+    status = "PASSED" if passed else "FAILED"
+    body = _stack(
+        Text(str(event.get("reason", "No verification reason"))),
+        _section("Checks", _check_lines(event.get("checks", []))),
+        _section("Command results", _verification_results(event.get("results", []))),
+    )
+    return Panel(
+        body,
+        title=Text(f"[verifier] - Attempt {event.get('attempt', '?')} - {status}"),
+        border_style="green" if passed else "red",
+        padding=(0, 1),
+    )
+
+
+def _final(event: dict) -> Panel:
+    passed = bool(event.get("passed"))
+    return Panel(
+        Text(str(event.get("content", ""))),
+        title=Text(f"[final] - {'SUCCESS' if passed else 'FAILURE'}"),
+        border_style="green" if passed else "red",
+        padding=(1, 2),
+    )
+
+
+EVENT_RENDERERS = {
+    "tool_call": _tool_call,
+    "tool_result": _tool_result,
+    "planner": _planner,
+    "actor": _actor,
+    "verifier": _verifier,
+    "final": _final,
+}
+
+
+def render_event(console: Console, event: dict) -> None:
+    """Render one event without interpreting untrusted Rich markup."""
+    kind = event.get("type", "unknown")
+    if kind == "react_event":
+        nested = event.get("event", {})
+        render_event(console, nested if isinstance(nested, dict) else {})
+        return
+    renderer = EVENT_RENDERERS.get(kind)
+    if renderer is not None:
+        console.print(renderer(event))
+    elif kind == "run_start":
+        line = Text("Workspace  ", style="bold cyan")
+        line.append(str(event.get("workspace", "unknown")))
+        console.print(line)
+    elif kind == "model_start":
+        console.print(Rule(Text(f"Model - Iteration {event.get('iteration', '?')}"), style="dim"))
+    elif kind == "ai_message":
+        console.print(Text(str(event.get("content", ""))))
+    elif kind == "final_answer":
+        console.print(
+            Panel(
+                Text(str(event.get("content", ""))),
+                title=Text("Agent answer"),
+                border_style="cyan",
+            )
+        )
+    elif kind == "error":
+        console.print(
+            Panel(
+                Text(str(event.get("message", "Unknown error"))),
+                title=Text(f"Error - {event.get('code', 'unknown')}"),
+                border_style="red",
+            )
+        )
+    else:
+        console.print(Text(f"Unsupported event: {kind}", style="dim"))
