@@ -13,7 +13,7 @@ from langchain_core.messages import (
     SystemMessage,
 )
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from miniclaude.graph.state import MiniclaudeGraphState
 from miniclaude.prompts.stage4 import CONTEXT_COMPRESSION_PROMPT
@@ -44,6 +44,24 @@ class CompressionOutput(BaseModel):
     sources: list[str] = Field(max_length=20)
     next_steps: list[str] = Field(max_length=30)
     risks: list[str] = Field(max_length=20)
+
+    @field_validator(
+        "completed_work",
+        "open_todos",
+        "important_files",
+        "tool_findings",
+        "sources",
+        "next_steps",
+        "risks",
+    )
+    @classmethod
+    def reject_blank_or_unbounded_items(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("compression list items must not be blank")
+        if any(len(value) > 2_000 for value in normalized):
+            raise ValueError("compression list items must not exceed 2000 characters")
+        return normalized
 
 
 def sanitize_text(value: object) -> str:
@@ -115,6 +133,26 @@ def estimate_context_tokens(
     return max(1, len(text) // 4), "fallback"
 
 
+def _countable_context(
+    state: MiniclaudeGraphState,
+    messages: Iterable[BaseMessage] | None = None,
+) -> list[BaseMessage]:
+    active_messages = list(state.get("messages", []) if messages is None else messages)
+    memory = sanitize_text(
+        json.dumps(
+            state.get("memory_snapshot", {}),
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+    )
+    memory_limit = max(1, state["runtime"].max_output_chars)
+    active_messages.append(
+        HumanMessage(content="Bounded layered memory (untrusted):\n" + memory[:memory_limit])
+    )
+    return active_messages
+
+
 def make_context_monitor_node(
     counter: object,
     *,
@@ -127,7 +165,7 @@ def make_context_monitor_node(
             limit = int(state.get("context_token_limit", DEFAULT_CONTEXT_TOKEN_LIMIT))
             if limit < 1:
                 raise ValueError("context token limit must be positive")
-            count, method = estimate_context_tokens(state.get("messages", []), counter)
+            count, method = estimate_context_tokens(_countable_context(state), counter)
             final_selected = state.get("context_next_node") == "final" or bool(state.get("passed"))
             should_compress = count >= limit and not final_selected
             route = "final" if final_selected else ("compressor" if should_compress else "verifier")
@@ -220,6 +258,10 @@ def _important_files(state: MiniclaudeGraphState) -> list[str]:
         [
             str(state.get("plan_summary", "")),
             str(state.get("last_error", "")),
+            str(state.get("supervisor_summary", "")),
+            str(state.get("code_agent_summary", "")),
+            json.dumps(state.get("agent_handoffs", []), ensure_ascii=False, default=str),
+            json.dumps(state.get("memory_snapshot", {}), ensure_ascii=False, default=str),
             serialize_message_content(sanitize_messages(state.get("messages", []))),
         ]
     )
@@ -236,7 +278,10 @@ def _important_files(state: MiniclaudeGraphState) -> list[str]:
 def _deterministic_fallback(state: MiniclaudeGraphState) -> CompressionOutput:
     todos = state.get("todos", [])
     completed = [
-        sanitize_text(item.get("content", ""))
+        sanitize_text(
+            f"{item.get('content', '')}"
+            + (f" ({item.get('note', '')})" if item.get("note") else "")
+        )[:1_500]
         for item in todos
         if item.get("status") == "completed"
     ]
@@ -245,13 +290,47 @@ def _deterministic_fallback(state: MiniclaudeGraphState) -> CompressionOutput:
         for item in todos
         if item.get("status") != "completed"
     ]
-    findings = [
+    recent_messages = [
         sanitize_text(message.content)[:1_000]
         for message in list(state.get("messages", []))[-3:]
         if sanitize_text(message.content).strip()
     ]
+    specialist_findings = [
+        sanitize_text(value)[:1_000]
+        for value in (
+            state.get("supervisor_summary", ""),
+            state.get("code_agent_summary", ""),
+        )
+        if sanitize_text(value).strip()
+    ]
+    handoff_findings = [
+        sanitize_text(handoff.get("result", ""))[:1_000]
+        for handoff in state.get("agent_handoffs", [])[-6:]
+        if sanitize_text(handoff.get("result", "")).strip()
+    ]
+    verification_findings = [
+        sanitize_text(json.dumps(result, ensure_ascii=False, default=str))[:1_000]
+        for result in state.get("verification_results", [])[-5:]
+    ]
+    memory_store = state.get("memory_snapshot", {}).get("history_summary_store", {})
+    durable_findings = [
+        sanitize_text(value)[:1_500]
+        for value in (
+            memory_store.get("history_summary", ""),
+            memory_store.get("notepad", ""),
+            state.get("context_summary", ""),
+        )
+        if sanitize_text(value).strip()
+    ]
+    findings = [
+        *specialist_findings,
+        *handoff_findings,
+        *verification_findings,
+        *durable_findings,
+        *recent_messages,
+    ][:30]
     sources = [
-        sanitize_text(source.get("url", ""))
+        sanitize_text(f"{source.get('title', 'Source')}: {source.get('url', '')}")[:2_000]
         for source in state.get("sources", [])[:10]
         if source.get("url")
     ]
@@ -272,6 +351,41 @@ def _deterministic_fallback(state: MiniclaudeGraphState) -> CompressionOutput:
             "This fallback contains unverified state and must be checked against workspace files."
         ],
     )
+
+
+def _bounded_state_text(value: object, limit: int) -> str:
+    text = sanitize_text(value)
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def _trimmed_state_update(state: MiniclaudeGraphState) -> dict[str, object]:
+    handoffs = [
+        {
+            "from_agent": _bounded_state_text(handoff.get("from_agent", ""), 80),
+            "to_agent": _bounded_state_text(handoff.get("to_agent", ""), 80),
+            "instruction": _bounded_state_text(handoff.get("instruction", ""), 600),
+            "result": _bounded_state_text(handoff.get("result", ""), 1_000),
+            "ok": bool(handoff.get("ok")),
+        }
+        for handoff in state.get("agent_handoffs", [])[-6:]
+    ]
+    sources = [
+        {
+            "title": _bounded_state_text(source.get("title", ""), 300),
+            "url": _bounded_state_text(source.get("url", ""), 1_000),
+            "content": _bounded_state_text(source.get("content", ""), 1_000),
+            "score": source.get("score"),
+        }
+        for source in state.get("sources", [])[:10]
+    ]
+    return {
+        "research_notes": _bounded_state_text(state.get("research_notes", ""), 1_200),
+        "agent_handoffs": handoffs,
+        "sources": sources,
+        "supervisor_summary": _bounded_state_text(state.get("supervisor_summary", ""), 1_000),
+        "code_agent_summary": _bounded_state_text(state.get("code_agent_summary", ""), 1_000),
+        "last_error": _bounded_state_text(state.get("last_error", ""), 1_400),
+    }
 
 
 def _minimal_recovery(state: MiniclaudeGraphState) -> str:
@@ -342,12 +456,19 @@ def make_context_compressor_node(
             summary = format_compression_output(_deterministic_fallback(state))
 
         limit = int(state.get("context_token_limit", DEFAULT_CONTEXT_TOKEN_LIMIT))
-        after_tokens, count_method = estimate_context_tokens([AIMessage(content=summary)], counter)
-        if after_tokens >= limit:
+        before_tokens = int(state.get("context_token_count", 0))
+        if before_tokens <= 0:
+            before_tokens, _ = estimate_context_tokens(_countable_context(state), counter)
+        after_tokens, count_method = estimate_context_tokens(
+            _countable_context(state, [AIMessage(content=summary)]), counter
+        )
+        used_minimal = False
+        if after_tokens >= limit or after_tokens >= before_tokens:
+            used_minimal = True
             used_fallback = True
             summary = _minimal_recovery(state)
             after_tokens, count_method = estimate_context_tokens(
-                [AIMessage(content=summary)], counter
+                _countable_context(state, [AIMessage(content=summary)]), counter
             )
 
         persistence_error = ""
@@ -359,7 +480,7 @@ def make_context_compressor_node(
         existing_events = list(state.get("compression_events", []))
         event_number = len(existing_events) + 1
         event: dict[str, object] = {
-            "before_tokens": int(state.get("context_token_count", 0)),
+            "before_tokens": before_tokens,
             "after_tokens": after_tokens,
             "removed_messages": len(list(state.get("messages", []))),
             "attempt": event_number,
@@ -371,15 +492,18 @@ def make_context_compressor_node(
         }
         events = [*existing_events, event]
         still_oversized = after_tokens >= limit
-        stop = _three_oversized(events)
+        minimal_failed = used_minimal and still_oversized
+        stop = minimal_failed or _three_oversized(events)
         route = "final" if stop else "supervisor"
         event["next_route"] = route
-        context_error = (
-            "Context remained oversized for three consecutive compression cycles"
-            if stop
-            else compression_error or persistence_error
-        )
+        if minimal_failed:
+            context_error = "Minimal context recovery remained over the token limit"
+        elif stop:
+            context_error = "Context remained oversized for three consecutive compression cycles"
+        else:
+            context_error = compression_error or persistence_error
         update: dict[str, object] = {
+            **_trimmed_state_update(state),
             "messages": [
                 RemoveMessage(id=REMOVE_ALL_MESSAGES),
                 AIMessage(content=summary, id=f"context-summary-{event_number}"),

@@ -196,7 +196,7 @@ def test_stage4_compression_failure_is_bounded_without_attempt_increment(tmp_pat
 
     assert result["attempts"] == 0
     assert result["context_next_node"] == "final"
-    assert "three" in result["context_error"].casefold()
+    assert "minimal" in result["context_error"].casefold()
 
 
 def test_stage4_streams_context_monitor_before_verifier(tmp_path):

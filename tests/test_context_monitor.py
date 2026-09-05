@@ -75,6 +75,25 @@ def test_token_estimator_falls_back_for_structured_content():
     assert method == "fallback"
 
 
+def test_context_monitor_counts_sanitized_layered_memory_payload(tmp_path):
+    state = initial_graph_state("task", runtime=RuntimeState(tmp_path))
+    state["messages"] = [HumanMessage(content="message")]
+    state["memory_snapshot"] = {
+        "rules": {},
+        "working_memory": {"note": "Bearer private-memory-secret"},
+        "history_summary_store": {},
+    }
+    counter = CountingModel(12)
+    events = []
+
+    make_context_monitor_node(counter, emit=events.append)(state)
+
+    assert len(counter.messages) == 2
+    assert "private-memory-secret" not in str(counter.messages)
+    assert "[REDACTED]" in str(counter.messages[-1])
+    assert "memory" not in events[0]
+
+
 def test_context_monitor_preserves_final_route(tmp_path):
     state = initial_graph_state("task", runtime=RuntimeState(tmp_path))
     state["context_token_limit"] = 1

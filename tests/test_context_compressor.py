@@ -116,6 +116,16 @@ def test_compressor_uses_fallback_for_invalid_or_blank_output(tmp_path):
     assert "## Active Goal" in update["context_summary"]
 
 
+def test_compressor_rejects_blank_structured_list_items(tmp_path):
+    state = _state(tmp_path)
+    output = _output().model_dump()
+    output["open_todos"] = [" "]
+
+    update = make_context_compressor_node(StructuredModel(output), SequenceCounter(40))(state)
+
+    assert update["compression_events"][-1]["used_fallback"] is True
+
+
 def test_compressor_keeps_memory_when_history_persistence_fails(tmp_path, monkeypatch):
     state = _state(tmp_path)
 
@@ -147,19 +157,58 @@ def test_compressor_uses_minimal_recovery_if_first_replacement_is_too_large(tmp_
     assert "Minimal Context Recovery" in update["context_summary"]
 
 
-def test_compressor_stops_after_three_still_oversized_cycles(tmp_path):
+def test_compressor_uses_minimal_recovery_if_summary_does_not_reduce_context(tmp_path):
     state = _state(tmp_path)
-    state["context_token_limit"] = 100
-    node = make_context_compressor_node(
-        StructuredModel(_output()), SequenceCounter(200, 200, 200, 200, 200, 200)
+
+    update = make_context_compressor_node(StructuredModel(_output()), SequenceCounter(950, 20))(
+        state
     )
 
-    for _ in range(3):
-        update = node(state)
-        state.update(update)
-        state["messages"] = [update["messages"][-1]]
+    assert "Minimal Context Recovery" in update["context_summary"]
+    assert update["context_token_count"] == 20
 
-    assert len(state["compression_events"]) == 3
-    assert state["context_should_compress"] is True
-    assert state["context_next_node"] == "final"
-    assert "three" in state["context_error"].casefold()
+
+def test_compressor_fails_immediately_if_minimal_recovery_is_still_oversized(tmp_path):
+    state = _state(tmp_path)
+    state["context_token_limit"] = 100
+
+    update = make_context_compressor_node(StructuredModel(_output()), SequenceCounter(200, 200))(
+        state
+    )
+
+    assert update["context_should_compress"] is True
+    assert update["context_next_node"] == "final"
+    assert "minimal" in update["context_error"].casefold()
+
+
+def test_compressor_trims_long_state_fields_and_keeps_durable_fallback_evidence(tmp_path):
+    state = _state(tmp_path)
+    state["research_notes"] = "r" * 3_000
+    state["supervisor_summary"] = "s" * 3_000
+    state["code_agent_summary"] = "implemented app.py"
+    state["agent_handoffs"] = [
+        {
+            "from_agent": "planner",
+            "to_agent": "codeAgent",
+            "instruction": "i" * 2_000,
+            "result": "changed app.py",
+            "ok": True,
+        }
+        for _ in range(10)
+    ]
+    state["memory_snapshot"]["history_summary_store"] = {
+        "history_summary": "prior durable history",
+        "notepad": "durable decision",
+    }
+
+    update = make_context_compressor_node(
+        StructuredModel(error=RuntimeError("offline")), SequenceCounter(100)
+    )(state)
+
+    assert len(update["research_notes"]) <= 1_203
+    assert len(update["supervisor_summary"]) <= 1_003
+    assert len(update["agent_handoffs"]) == 6
+    assert len(update["agent_handoffs"][0]["instruction"]) <= 603
+    assert "implemented app.py" in update["context_summary"]
+    assert "prior durable history" in update["context_summary"]
+    assert "durable decision" in update["context_summary"]
