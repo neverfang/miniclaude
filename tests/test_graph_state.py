@@ -2,7 +2,7 @@ import pytest
 from langgraph.graph.message import add_messages
 
 from miniclaude.core.state import RuntimeState, ToolError
-from miniclaude.graph.state import TodoItem, initial_graph_state
+from miniclaude.graph.state import AgentHandoff, SourceItem, TodoItem, initial_graph_state
 from miniclaude.tools.registry import execute_tool
 from miniclaude.tools.todo_tools import TodoTracker, build_todo_tools
 
@@ -35,6 +35,31 @@ def test_initial_graph_state_has_bounded_retry_defaults(tmp_path):
     assert state["todos"] == []
     assert state["verification_results"] == []
     assert state["passed"] is False
+
+
+def test_initial_graph_state_has_independent_stage_three_defaults(tmp_path):
+    first = initial_graph_state("first", runtime=RuntimeState(tmp_path / "first"))
+    second = initial_graph_state("second", runtime=RuntimeState(tmp_path / "second"))
+
+    assert first["research_notes"] == ""
+    assert first["sources"] == []
+    assert first["agent_handoffs"] == []
+    assert first["code_agent_summary"] == ""
+    assert first["supervisor_summary"] == ""
+    first["sources"].append(
+        SourceItem(title="Docs", url="https://example.com", content="Evidence", score=1.0)
+    )
+    first["agent_handoffs"].append(
+        AgentHandoff(
+            from_agent="planner",
+            to_agent="searchAgent",
+            instruction="research",
+            result="done",
+            ok=True,
+        )
+    )
+    assert second["sources"] == []
+    assert second["agent_handoffs"] == []
 
 
 @pytest.mark.parametrize("task,max_attempts", [("", 3), ("task", 0), ("task", 11)])

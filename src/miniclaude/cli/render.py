@@ -115,7 +115,10 @@ def _tool_call(event: dict) -> Panel:
     sections = [_section(str(key), value, label_style="bold magenta") for key, value in values]
     return Panel(
         Group(*sections) if sections else Text("No arguments", style="dim"),
-        title=Text(f"Tool Call - {event.get('name', 'unknown')}"),
+        title=Text(
+            f"Tool Call{' [' + str(event['_role']) + ']' if event.get('_role') else ''} - "
+            f"{event.get('name', 'unknown')}"
+        ),
         border_style="magenta",
         padding=(0, 1),
     )
@@ -132,7 +135,10 @@ def _tool_result(event: dict) -> Panel:
     ]
     return Panel(
         Group(*sections) if sections else Text("No result details", style="dim"),
-        title=Text(f"Tool Result - {event.get('name', 'unknown')}"),
+        title=Text(
+            f"Tool Result{' [' + str(event['_role']) + ']' if event.get('_role') else ''} - "
+            f"{event.get('name', 'unknown')}"
+        ),
         border_style="green" if ok else "red",
         padding=(0, 1),
     )
@@ -163,6 +169,46 @@ def _actor(event: dict) -> Panel:
         body,
         title=Text(f"[actor] - Attempt {event.get('attempt', '?')} - {status}"),
         border_style="cyan" if event.get("ok") else "yellow",
+        padding=(0, 1),
+    )
+
+
+def _supervisor(event: dict) -> Panel:
+    body = _stack(
+        Text(str(event.get("plan_summary", "No plan summary"))),
+        _section("Todos", _todo_lines(event.get("todos", []))),
+        _section("Acceptance criteria", _bullet_lines(event.get("acceptance_criteria", []))),
+        _section("Verification commands", _bullet_lines(event.get("verification_commands", []))),
+        _section("Research notes", event.get("research_notes", "None")),
+        _section("Sources", _bullet_lines(event.get("sources", []))),
+    )
+    return Panel(
+        body,
+        title=Text(f"[supervisor] - Attempt {event.get('attempt', '?')}"),
+        border_style="blue",
+        padding=(0, 1),
+    )
+
+
+def _handoff(event: dict) -> Panel:
+    ok = bool(event.get("ok"))
+    return Panel(
+        _stack(
+            _section("Instruction", event.get("instruction", "")),
+            _section("Result", event.get("result", "")),
+        ),
+        title=Text(f"Handoff - {event.get('from_agent', '?')} -> {event.get('to_agent', '?')}"),
+        border_style="green" if ok else "red",
+        padding=(0, 1),
+    )
+
+
+def _specialist(event: dict, role: str) -> Panel:
+    ok = bool(event.get("ok"))
+    return Panel(
+        Text(str(event.get("summary", "No summary"))),
+        title=Text(f"[{role}] - {'COMPLETE' if ok else 'INCOMPLETE'}"),
+        border_style="cyan" if ok else "yellow",
         padding=(0, 1),
     )
 
@@ -198,6 +244,10 @@ EVENT_RENDERERS = {
     "tool_result": _tool_result,
     "planner": _planner,
     "actor": _actor,
+    "supervisor": _supervisor,
+    "handoff": _handoff,
+    "search_agent": lambda event: _specialist(event, "searchAgent"),
+    "code_agent": lambda event: _specialist(event, "codeAgent"),
     "verifier": _verifier,
     "final": _final,
 }
@@ -208,6 +258,9 @@ def render_event(console: Console, event: dict) -> None:
     kind = event.get("type", "unknown")
     if kind == "react_event":
         nested = event.get("event", {})
+        role = event.get("role", "")
+        if isinstance(nested, dict) and role not in {"", "actor"}:
+            nested = {**nested, "_role": role}
         render_event(console, nested if isinstance(nested, dict) else {})
         return
     renderer = EVENT_RENDERERS.get(kind)

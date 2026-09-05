@@ -17,6 +17,11 @@ def pytest_addoption(parser):
         action="store_true",
         help="Call the stage-two graph and run generated Game of Life code",
     )
+    parser.addoption(
+        "--run-live-stage3",
+        action="store_true",
+        help="Call DeepSeek and Tavily through the stage-three MultiAgent workflow",
+    )
 
 
 def pytest_configure(config):

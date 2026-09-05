@@ -308,12 +308,55 @@ def test_workflow_streams_stage_events(tmp_path):
     ]
 
 
-def test_core_workflow_api_builds_and_streams_the_real_graph(tmp_path):
+def test_core_workflow_api_builds_and_streams_the_real_stage3_graph(tmp_path):
     from miniclaude.core.agent import stream_workflow_events
 
     model = SequenceModel(
-        [AIMessage(content="implementation"), AIMessage(content="inspection")],
-        structured_replies=[plan(), verdict(True, "passed")],
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "TodoWriteTool",
+                        "args": {
+                            "plan_summary": "Implement once",
+                            "todos": [{"id": "build", "content": "Build and test"}],
+                            "acceptance_criteria": ["verification command passes"],
+                            "verification_commands": ["python -c \"print('verified')\""],
+                        },
+                        "id": "plan",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "CallCodeAgentTool",
+                        "args": {"instruction": "implement"},
+                        "id": "code",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "TodoUpdateTool",
+                        "args": {
+                            "todo_id": "build",
+                            "status": "completed",
+                            "note": "implemented",
+                        },
+                        "id": "todo-complete",
+                    }
+                ],
+            ),
+            AIMessage(content="implementation"),
+            AIMessage(content="supervision complete"),
+            AIMessage(content="inspection"),
+        ],
+        structured_replies=[verdict(True, "passed")],
     )
 
     events = list(
@@ -329,7 +372,7 @@ def test_core_workflow_api_builds_and_streams_the_real_graph(tmp_path):
     stage_events = [
         event["type"]
         for event in events
-        if event["type"] in {"planner", "actor", "verifier", "final"}
+        if event["type"] in {"supervisor", "handoff", "code_agent", "verifier", "final"}
     ]
-    assert stage_events == ["planner", "actor", "verifier", "final"]
+    assert stage_events == ["handoff", "code_agent", "supervisor", "verifier", "final"]
     assert events[-1]["passed"] is True

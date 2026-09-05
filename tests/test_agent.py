@@ -288,3 +288,100 @@ def test_workflow_stream_normalizes_updates_and_nested_react_events(tmp_path):
     state, options = workflow.calls[0]
     assert state["max_attempts"] == 2
     assert options["stream_mode"] == ["updates", "custom"]
+
+
+def test_stage3_stream_normalizes_supervisor_handoffs_and_specialists(tmp_path):
+    from miniclaude.core.agent import stream_workflow_events
+
+    class FakeWorkflow:
+        def stream(self, state, **kwargs):
+            yield (
+                "custom",
+                {"type": "supervisor_event", "event": {"type": "model_start", "iteration": 1}},
+            )
+            yield (
+                "custom",
+                {
+                    "type": "search_agent_event",
+                    "event": {
+                        "type": "tool_call",
+                        "name": "WebSearchTool",
+                        "args": {"query": "docs"},
+                        "id": "s",
+                    },
+                },
+            )
+            yield (
+                "custom",
+                {
+                    "type": "handoff",
+                    "handoff": {
+                        "from_agent": "planner",
+                        "to_agent": "searchAgent",
+                        "instruction": "research",
+                        "result": "facts",
+                        "ok": True,
+                    },
+                },
+            )
+            yield (
+                "custom",
+                {
+                    "type": "code_agent_event",
+                    "event": {
+                        "type": "tool_result",
+                        "name": "FileWriteTool",
+                        "id": "w",
+                        "result": {"ok": True},
+                    },
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "supervisor": {
+                        "plan_summary": "plan",
+                        "todos": [],
+                        "acceptance_criteria": ["done"],
+                        "verification_commands": [],
+                        "research_notes": "facts",
+                        "sources": [],
+                        "agent_handoffs": [],
+                        "supervisor_summary": "coordinated",
+                        "last_error": "",
+                    }
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "verifier": {
+                        "attempts": 1,
+                        "passed": True,
+                        "verification_reason": "done",
+                        "verification_checks": [],
+                        "verification_results": [],
+                    }
+                },
+            )
+            yield "updates", {"final": {"final_answer": "verified"}}
+
+    events = list(
+        stream_workflow_events("task", workspace=tmp_path, model=object(), workflow=FakeWorkflow())
+    )
+    kinds = [event["type"] for event in events]
+    assert kinds == [
+        "run_start",
+        "react_event",
+        "react_event",
+        "handoff",
+        "search_agent",
+        "react_event",
+        "supervisor",
+        "verifier",
+        "final",
+    ]
+    assert events[1]["role"] == "supervisor"
+    assert events[2]["role"] == "searchAgent"
+    assert events[5]["role"] == "codeAgent"
+    assert events[6]["plan_summary"] == "plan"

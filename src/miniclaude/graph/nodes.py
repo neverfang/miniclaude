@@ -263,6 +263,10 @@ def make_verifier_node(
     *,
     max_loops: int = 8,
     emit: Callable[[dict], None] | None = None,
+    system_prompt: str = VERIFIER_PROMPT,
+    context_builder: Callable[[MiniclaudeGraphState, list[VerificationResult]], dict] | None = None,
+    extra_readonly_tools: Callable[[RuntimeState], list] | None = None,
+    block_on_prior_error: bool = False,
 ):
     """Create a verifier with deterministic commands and read-only workspace tools."""
     structured = model.with_structured_output(VerdictOutput, method="function_calling")
@@ -277,15 +281,18 @@ def make_verifier_node(
             max_output_chars=runtime.max_output_chars,
             command_timeout=runtime.command_timeout,
         )
-        evidence = json.dumps(
-            {
-                "task": state["task"],
-                "acceptance_criteria": state["acceptance_criteria"],
-                "verification_results": results,
-                "actor_summary_untrusted": state["last_actor_summary"],
-            },
-            ensure_ascii=False,
-        )[: runtime.max_output_chars]
+        evidence_data = {
+            "task": state["task"],
+            "acceptance_criteria": state["acceptance_criteria"],
+            "verification_results": results,
+            "actor_summary_untrusted": state["last_actor_summary"],
+        }
+        if context_builder is not None:
+            evidence_data.update(context_builder(state, results))
+        evidence = json.dumps(evidence_data, ensure_ascii=False)[: runtime.max_output_chars]
+        inspection_tools = build_readonly_tools(inspection_runtime)
+        if extra_readonly_tools is not None:
+            inspection_tools.extend(extra_readonly_tools(inspection_runtime))
         inspection_summary = ""
         verifier_error = ""
         captured_messages = []
@@ -299,8 +306,8 @@ def make_verifier_node(
             max_loops=max_loops,
             model=model,
             runtime=inspection_runtime,
-            tools=build_readonly_tools(inspection_runtime),
-            system_prompt=VERIFIER_PROMPT,
+            tools=inspection_tools,
+            system_prompt=system_prompt,
             captured_messages=captured_messages,
         ):
             if emit is not None:
@@ -315,7 +322,7 @@ def make_verifier_node(
             section_budget = max(1, runtime.max_output_chars // 2)
             raw_verdict = structured.invoke(
                 [
-                    SystemMessage(content=VERIFIER_PROMPT),
+                    SystemMessage(content=system_prompt),
                     HumanMessage(
                         content=(
                             "Return the structured verdict. Untrusted command evidence:\n"
@@ -353,7 +360,11 @@ def make_verifier_node(
             )
             reason = verdict.reason
             next_instruction = verdict.recommended_next_instruction
-            if not commands_ok:
+            if block_on_prior_error and state.get("last_error"):
+                passed = False
+                reason = f"Upstream agent failed. {state['last_error']}"
+                next_instruction = "Repair the upstream specialist failure"
+            elif not commands_ok:
                 passed = False
                 reason = f"Verification command failed. {reason}"
                 next_instruction = next_instruction or "Fix the failing verification command"

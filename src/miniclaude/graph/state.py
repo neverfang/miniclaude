@@ -31,6 +31,21 @@ class VerificationCheck(TypedDict):
     detail: str
 
 
+class SourceItem(TypedDict):
+    title: str
+    url: str
+    content: str
+    score: float | None
+
+
+class AgentHandoff(TypedDict):
+    from_agent: str
+    to_agent: str
+    instruction: str
+    result: str
+    ok: bool
+
+
 class MiniclaudeGraphState(TypedDict, total=False):
     task: str
     runtime: RuntimeState
@@ -48,6 +63,11 @@ class MiniclaudeGraphState(TypedDict, total=False):
     max_attempts: int
     last_actor_summary: str
     final_answer: str
+    research_notes: str
+    sources: list[SourceItem]
+    agent_handoffs: list[AgentHandoff]
+    code_agent_summary: str
+    supervisor_summary: str
 
 
 def initial_graph_state(
@@ -75,4 +95,9 @@ def initial_graph_state(
         max_attempts=max_attempts,
         last_actor_summary="",
         final_answer="",
+        research_notes="",
+        sources=[],
+        agent_handoffs=[],
+        code_agent_summary="",
+        supervisor_summary="",
     )

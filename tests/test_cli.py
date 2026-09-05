@@ -141,6 +141,7 @@ def test_cli_real_loop_and_default_workspace(monkeypatch, tmp_path):
     assert len(list((tmp_path / ".miniclaude/workspaces").iterdir())) == 1
     assert calls[0]["max_attempts"] == 2
     assert calls[0]["model"] is not None
+    assert "env_file" in calls[0]
 
 
 def test_explicit_workspace_and_shell_warning(monkeypatch, tmp_path):

@@ -176,3 +176,42 @@ def test_status_markers_render_on_windows_gbk_console():
     assert "[planner] - Attempt 1" in output
     assert "[ok] Done" in output
     assert "[~] Working" in output
+
+
+def test_multiagent_events_render_as_distinct_panels():
+    output = rendered(
+        {
+            "type": "supervisor",
+            "attempt": 1,
+            "plan_summary": "coordinate",
+            "todos": [],
+            "acceptance_criteria": ["done"],
+            "verification_commands": [],
+            "research_notes": "facts",
+            "sources": [],
+        },
+        {
+            "type": "handoff",
+            "from_agent": "planner",
+            "to_agent": "searchAgent",
+            "instruction": "research",
+            "result": "facts",
+            "ok": True,
+        },
+        {"type": "search_agent", "summary": "facts", "ok": True},
+        {"type": "code_agent", "summary": "implemented", "ok": True},
+        {
+            "type": "react_event",
+            "role": "searchAgent",
+            "event": {
+                "type": "tool_call",
+                "name": "WebSearchTool",
+                "args": {"query": "official docs"},
+            },
+        },
+    )
+    assert "[supervisor] - Attempt 1" in output
+    assert "Handoff - planner -> searchAgent" in output
+    assert "[searchAgent] - COMPLETE" in output
+    assert "[codeAgent] - COMPLETE" in output
+    assert "Tool Call [searchAgent] - WebSearchTool" in output

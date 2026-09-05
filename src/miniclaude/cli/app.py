@@ -17,14 +17,14 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
 @app.command()
 def main(
-    task: Annotated[str, typer.Argument(help="Task for the stage-two coding workflow.")],
+    task: Annotated[str, typer.Argument(help="Task for the stage-three MultiAgent workflow.")],
     workspace: Annotated[
         Path | None, typer.Option("--workspace", "-w", help="Generated files go here.")
     ] = None,
     max_loops: Annotated[int, typer.Option(min=1, max=100, help="Maximum model calls.")] = 10,
     max_attempts: Annotated[
         int,
-        typer.Option(min=1, max=10, help="Maximum Plan-Execute-Verify attempts."),
+        typer.Option(min=1, max=10, help="Maximum Supervisor-Verify attempts."),
     ] = 3,
     allow_shell: Annotated[
         bool, typer.Option(help="Allow unsandboxed local commands. Trusted tasks only.")
@@ -33,7 +33,7 @@ def main(
         Path | None, typer.Option(help="Explicit .env file; default is startup directory/.env.")
     ] = None,
 ):
-    """Run the Plan-Execute-Verify coding workflow."""
+    """Run the Supervisor-Specialists-Verify coding workflow."""
     console = Console(highlight=False)
     if not task.strip():
         console.print(Text("Task must not be empty", style="red"))
@@ -61,6 +61,7 @@ def main(
             max_attempts=max_attempts,
             allow_shell=allow_shell,
             model=model,
+            env_file=env_file,
         ):
             render_event(console, event)
             if event["type"] == "final":
