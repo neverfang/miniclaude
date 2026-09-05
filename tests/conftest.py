@@ -22,6 +22,11 @@ def pytest_addoption(parser):
         action="store_true",
         help="Call DeepSeek and Tavily through the stage-three MultiAgent workflow",
     )
+    parser.addoption(
+        "--run-live-stage4",
+        action="store_true",
+        help="Call DeepSeek through Stage 4 and force one context compression",
+    )
 
 
 def pytest_configure(config):
