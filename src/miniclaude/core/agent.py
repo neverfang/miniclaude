@@ -168,21 +168,22 @@ def stream_workflow_events(
     env_file: Path | None = None,
     workflow=None,
 ) -> Iterator[dict]:
-    """Build and stream the stage-three workflow as stable application events."""
+    """Build and stream the Stage 4 workflow as stable application events."""
     if not task.strip() or not 1 <= max_loops <= 100 or not 1 <= max_attempts <= 10:
         raise ValueError("invalid task, max_loops, or max_attempts")
 
     # Local imports avoid a module cycle because graph nodes reuse stream_agent_events.
-    from miniclaude.graph.stage3_workflow import build_stage3_workflow
+    from miniclaude.graph.stage4_workflow import build_stage4_workflow
     from miniclaude.graph.state import initial_graph_state
     from miniclaude.tools.web_search_tool import build_web_search_tool
 
     configured_model = create_model(env_file=env_file) if model is None else model
     runtime = RuntimeState(workspace=workspace, allow_shell=allow_shell)
     state = initial_graph_state(task, runtime=runtime, max_attempts=max_attempts)
-    compiled = workflow or build_stage3_workflow(
+    compiled = workflow or build_stage4_workflow(
         supervisor_model=configured_model,
         verifier_model=configured_model,
+        context_counter=configured_model,
         web_search_tool=build_web_search_tool(
             env_file=env_file, max_output_chars=runtime.max_output_chars
         ),
@@ -199,7 +200,7 @@ def stream_workflow_events(
     for mode, chunk in compiled.stream(
         state,
         stream_mode=["updates", "custom"],
-        config={"recursion_limit": max_attempts * 3 + 3},
+        config={"recursion_limit": max_attempts * 6 + 12},
     ):
         if mode == "custom":
             kind = chunk.get("type")
@@ -229,6 +230,8 @@ def stream_workflow_events(
                     "summary": handoff.get("result", ""),
                     "ok": bool(handoff.get("ok")),
                 }
+            elif kind in {"context_monitor", "context_compressor"}:
+                yield chunk
             continue
         if mode != "updates" or not isinstance(chunk, dict):
             continue
@@ -244,7 +247,7 @@ def stream_workflow_events(
                     "acceptance_criteria": update.get("acceptance_criteria", []),
                     "verification_commands": update.get("verification_commands", []),
                 }
-            elif node == "supervisor":
+            elif node in {"supervisor", "contextual_supervisor"}:
                 yield {
                     "type": "supervisor",
                     "attempt": completed_attempts + 1,

@@ -22,6 +22,8 @@ def test_help_and_missing_task():
     assert "--workspace" in result.output
     assert "--allow-shell" in result.output
     assert "--max-attempts" in result.output
+    assert "stage-four" in result.output
+    assert "context-token" not in result.output
     assert runner.invoke(app, []).exit_code != 0
 
 

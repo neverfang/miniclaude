@@ -229,6 +229,44 @@ def _verifier(event: dict) -> Panel:
     )
 
 
+def _context_monitor(event: dict) -> Panel:
+    tokens = int(event.get("tokens", 0))
+    limit = int(event.get("limit", 0))
+    route = str(event.get("route", "unknown"))
+    over_limit = limit > 0 and tokens >= limit
+    body = _stack(
+        _section("Usage", f"{tokens:,} / {limit:,} tokens"),
+        _section("Counting method", event.get("method", "unknown")),
+        _section("Next route", route),
+    )
+    return Panel(
+        body,
+        title=Text(f"Context Monitor - {'COMPRESS' if over_limit else 'READY'}"),
+        border_style="yellow" if over_limit else "cyan",
+        padding=(0, 1),
+    )
+
+
+def _context_compressor(event: dict) -> Panel:
+    before = int(event.get("before_tokens", 0))
+    after = int(event.get("after_tokens", 0))
+    persistence_error = str(event.get("persistence_error", ""))
+    body = _stack(
+        _section("Reduction", f"{before:,} -> {after:,} tokens"),
+        _section("Removed messages", event.get("removed_messages", 0)),
+        _section("Counting method", event.get("count_method", "unknown")),
+        _section("Fallback", "yes" if event.get("used_fallback") else "no"),
+        _section("History persistence", persistence_error or "saved to HISTORY_SUMMARY.md"),
+        _section("Next route", event.get("next_route", "unknown")),
+    )
+    return Panel(
+        body,
+        title=Text("Context Compressor"),
+        border_style="yellow" if event.get("used_fallback") or persistence_error else "green",
+        padding=(0, 1),
+    )
+
+
 def _final(event: dict) -> Panel:
     passed = bool(event.get("passed"))
     return Panel(
@@ -248,6 +286,8 @@ EVENT_RENDERERS = {
     "handoff": _handoff,
     "search_agent": lambda event: _specialist(event, "searchAgent"),
     "code_agent": lambda event: _specialist(event, "codeAgent"),
+    "context_monitor": _context_monitor,
+    "context_compressor": _context_compressor,
     "verifier": _verifier,
     "final": _final,
 }

@@ -17,7 +17,9 @@ app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
 @app.command()
 def main(
-    task: Annotated[str, typer.Argument(help="Task for the stage-three MultiAgent workflow.")],
+    task: Annotated[
+        str, typer.Argument(help="Task for the stage-four context-engineered MultiAgent workflow.")
+    ],
     workspace: Annotated[
         Path | None, typer.Option("--workspace", "-w", help="Generated files go here.")
     ] = None,
@@ -33,7 +35,7 @@ def main(
         Path | None, typer.Option(help="Explicit .env file; default is startup directory/.env.")
     ] = None,
 ):
-    """Run the Supervisor-Specialists-Verify coding workflow."""
+    """Run the stage-four Supervisor-Specialists-Context-Verify workflow."""
     console = Console(highlight=False)
     if not task.strip():
         console.print(Text("Task must not be empty", style="red"))

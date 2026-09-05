@@ -385,3 +385,72 @@ def test_stage3_stream_normalizes_supervisor_handoffs_and_specialists(tmp_path):
     assert events[2]["role"] == "searchAgent"
     assert events[5]["role"] == "codeAgent"
     assert events[6]["plan_summary"] == "plan"
+
+
+def test_stage4_stream_passes_through_context_events(tmp_path):
+    from miniclaude.core.agent import stream_workflow_events
+
+    class FakeWorkflow:
+        def stream(self, state, **kwargs):
+            yield (
+                "custom",
+                {
+                    "type": "context_monitor",
+                    "tokens": 410_000,
+                    "limit": 400_000,
+                    "method": "model",
+                    "route": "compressor",
+                },
+            )
+            yield (
+                "custom",
+                {
+                    "type": "context_compressor",
+                    "before_tokens": 410_000,
+                    "after_tokens": 8_000,
+                    "used_fallback": False,
+                    "persistence_error": "",
+                    "next_route": "supervisor",
+                },
+            )
+            yield "updates", {"final": {"final_answer": "done"}}
+
+    events = list(
+        stream_workflow_events("task", workspace=tmp_path, model=object(), workflow=FakeWorkflow())
+    )
+
+    assert [event["type"] for event in events] == [
+        "run_start",
+        "context_monitor",
+        "context_compressor",
+        "final",
+    ]
+
+
+def test_default_workflow_builds_stage_four_with_one_model(tmp_path, monkeypatch):
+    from miniclaude.core.agent import stream_workflow_events
+    from miniclaude.graph import stage4_workflow
+
+    captured = {}
+
+    class FakeGraph:
+        def stream(self, state, **kwargs):
+            captured["state"] = state
+            captured["stream_options"] = kwargs
+            yield "updates", {"final": {"final_answer": "done"}}
+
+    def fake_builder(**kwargs):
+        captured["builder_options"] = kwargs
+        return FakeGraph()
+
+    monkeypatch.setattr(stage4_workflow, "build_stage4_workflow", fake_builder)
+    model = object()
+
+    list(stream_workflow_events("task", workspace=tmp_path, model=model))
+
+    options = captured["builder_options"]
+    assert options["supervisor_model"] is model
+    assert options["verifier_model"] is model
+    assert options["context_counter"] is model
+    assert captured["state"]["context_token_limit"] == 400_000
+    assert captured["stream_options"]["config"]["recursion_limit"] > 10

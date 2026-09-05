@@ -215,3 +215,52 @@ def test_multiagent_events_render_as_distinct_panels():
     assert "[searchAgent] - COMPLETE" in output
     assert "[codeAgent] - COMPLETE" in output
     assert "Tool Call [searchAgent] - WebSearchTool" in output
+
+
+def test_context_events_render_as_separate_literal_panels():
+    output = rendered(
+        {
+            "type": "context_monitor",
+            "tokens": 410_000,
+            "limit": 400_000,
+            "method": "model {literal}",
+            "route": "compressor",
+        },
+        {
+            "type": "context_compressor",
+            "before_tokens": 410_000,
+            "after_tokens": 8_000,
+            "used_fallback": True,
+            "persistence_error": "history unavailable [literal]",
+            "next_route": "supervisor",
+        },
+    )
+
+    assert "Context Monitor" in output
+    assert "410,000 / 400,000" in output
+    assert "model {literal}" in output
+    assert "Context Compressor" in output
+    assert "410,000 -> 8,000" in output
+    assert "Fallback" in output
+    assert "history unavailable [literal]" in output
+    assert output.index("Context Monitor") < output.index("Context Compressor")
+
+
+def test_context_events_are_safe_on_windows_gbk_console():
+    raw = BytesIO()
+    stream = TextIOWrapper(raw, encoding="gbk")
+    console = Console(file=stream, force_terminal=False, color_system=None, width=100)
+
+    render_event(
+        console,
+        {
+            "type": "context_monitor",
+            "tokens": 10,
+            "limit": 400_000,
+            "method": "fallback",
+            "route": "verifier",
+        },
+    )
+    stream.flush()
+
+    assert "Context Monitor" in raw.getvalue().decode("gbk")
