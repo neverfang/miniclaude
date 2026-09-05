@@ -46,6 +46,20 @@ class AgentHandoff(TypedDict):
     ok: bool
 
 
+class CompressionEvent(TypedDict):
+    before_tokens: int
+    after_tokens: int
+    removed_messages: int
+    attempt: int
+    used_fallback: bool
+
+
+class LayeredMemory(TypedDict):
+    rules: dict[str, object]
+    working_memory: dict[str, object]
+    history_summary_store: dict[str, object]
+
+
 class MiniclaudeGraphState(TypedDict, total=False):
     task: str
     runtime: RuntimeState
@@ -68,6 +82,16 @@ class MiniclaudeGraphState(TypedDict, total=False):
     agent_handoffs: list[AgentHandoff]
     code_agent_summary: str
     supervisor_summary: str
+    context_summary: str
+    context_token_count: int
+    context_token_limit: int
+    context_should_compress: bool
+    context_next_node: str
+    context_error: str
+    context_count_method: str
+    compression_events: list[CompressionEvent]
+    memory_snapshot: LayeredMemory
+    history_summary: str
 
 
 def initial_graph_state(
@@ -100,4 +124,14 @@ def initial_graph_state(
         agent_handoffs=[],
         code_agent_summary="",
         supervisor_summary="",
+        context_summary="",
+        context_token_count=0,
+        context_token_limit=400_000,
+        context_should_compress=False,
+        context_next_node="verifier",
+        context_error="",
+        context_count_method="",
+        compression_events=[],
+        memory_snapshot={},
+        history_summary="",
     )

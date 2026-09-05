@@ -2,7 +2,12 @@ import pytest
 from langgraph.graph.message import add_messages
 
 from miniclaude.core.state import RuntimeState, ToolError
-from miniclaude.graph.state import AgentHandoff, SourceItem, TodoItem, initial_graph_state
+from miniclaude.graph.state import (
+    AgentHandoff,
+    SourceItem,
+    TodoItem,
+    initial_graph_state,
+)
 from miniclaude.tools.registry import execute_tool
 from miniclaude.tools.todo_tools import TodoTracker, build_todo_tools
 
@@ -60,6 +65,36 @@ def test_initial_graph_state_has_independent_stage_three_defaults(tmp_path):
     )
     assert second["sources"] == []
     assert second["agent_handoffs"] == []
+
+
+def test_initial_graph_state_has_independent_stage_four_defaults(tmp_path):
+    from miniclaude.graph.state import CompressionEvent
+
+    first = initial_graph_state("one", runtime=RuntimeState(tmp_path / "one"))
+    second = initial_graph_state("two", runtime=RuntimeState(tmp_path / "two"))
+
+    assert first["context_summary"] == ""
+    assert first["context_token_count"] == 0
+    assert first["context_token_limit"] == 400_000
+    assert first["context_should_compress"] is False
+    assert first["context_next_node"] == "verifier"
+    assert first["context_error"] == ""
+    assert first["context_count_method"] == ""
+    assert first["compression_events"] == []
+    assert first["memory_snapshot"] == {}
+    assert first["history_summary"] == ""
+    first["compression_events"].append(
+        CompressionEvent(
+            before_tokens=10,
+            after_tokens=2,
+            removed_messages=3,
+            attempt=1,
+            used_fallback=False,
+        )
+    )
+
+    assert second["compression_events"] == []
+    assert second["memory_snapshot"] == {}
 
 
 @pytest.mark.parametrize("task,max_attempts", [("", 3), ("task", 0), ("task", 11)])
