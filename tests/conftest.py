@@ -27,6 +27,12 @@ def pytest_addoption(parser):
         action="store_true",
         help="Call DeepSeek through Stage 4 and force one context compression",
     )
+    parser.addoption(
+        "--run-live-stage5",
+        action="store_true",
+        default=False,
+        help="run paid DeepSeek Stage 5 acceptance with controlled generated execution",
+    )
 
 
 def pytest_configure(config):
