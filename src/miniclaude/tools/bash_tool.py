@@ -8,6 +8,7 @@ import sys
 import threading
 from pathlib import Path
 
+from miniclaude.core.approval import ApprovalDecision, classify_command_risk, make_approval_request
 from miniclaude.core.state import RuntimeState, ToolError
 
 
@@ -53,6 +54,63 @@ def _stop_tree(process: subprocess.Popen):
         process.kill()
 
 
+
+
+def _emit_runtime_event(state: RuntimeState, event: dict[str, object]) -> None:
+    if state.event_handler is None:
+        return
+    try:
+        state.event_handler(event)
+    except Exception:
+        pass
+
+
+def _approval_result(state: RuntimeState, command: str) -> dict[str, object] | None:
+    risk = classify_command_risk(command)
+    if risk.level == "safe":
+        return None
+
+    request = make_approval_request(command, risk, state.workspace)
+    base: dict[str, object] = {
+        "requires_approval": risk.level == "risky",
+        "approval_id": request.id,
+        "risk_level": risk.level,
+        "risk_reason": risk.reason,
+        "approved": False,
+    }
+    if risk.level == "blocked":
+        result = {**base, "ok": False, "error": f"blocked command: {risk.reason}"}
+        _emit_runtime_event(state, {"type": "approval_resolved", **result})
+        return result
+
+    if state.approval_mode == "auto":
+        result = {**base, "approved": True}
+        _emit_runtime_event(state, {"type": "approval_resolved", **result})
+        return result
+
+    if state.approval_mode == "deny" or state.approval_handler is None:
+        result = {**base, "ok": False, "error": f"approval denied: {risk.reason}"}
+        _emit_runtime_event(state, {"type": "approval_resolved", **result})
+        return result
+
+    _emit_runtime_event(
+        state,
+        {"type": "approval_requested", **base, "command": command},
+    )
+    try:
+        decision = state.approval_handler(request)
+        approved = isinstance(decision, ApprovalDecision) and decision.approved
+    except Exception:
+        approved = False
+    resolved = {**base, "approved": approved}
+    _emit_runtime_event(state, {"type": "approval_resolved", **resolved})
+    if not approved:
+        return {
+            **resolved,
+            "ok": False,
+            "error": f"approval denied: {risk.reason}",
+        }
+    return resolved
 def run_bash(state: RuntimeState, command: str, timeout_seconds: float | None = None) -> dict:
     if not state.allow_shell:
         raise ToolError("Shell is disabled. The user must opt in with --allow-shell")
@@ -61,6 +119,9 @@ def run_bash(state: RuntimeState, command: str, timeout_seconds: float | None = 
         raise ToolError("timeout_seconds must be finite, greater than 0 and at most 600")
     if not command.strip() or len(command) > 16_000 or "\x00" in command:
         raise ToolError("Provide a nonempty command of at most 16000 characters")
+    approval = _approval_result(state, command)
+    if approval is not None and not approval.get("approved"):
+        return approval
     if os.name == "nt":
         shell = (
             Path(os.environ.get("SystemRoot", r"C:\Windows"))
@@ -138,6 +199,7 @@ def run_bash(state: RuntimeState, command: str, timeout_seconds: float | None = 
         "timed_out": timed_out,
         "truncated": any(overflows) or any(len(s) > state.max_output_chars for s in decoded),
     }
+    result.update(approval or {})
     if timed_out:
         result["error"] = "Command timed out; process-tree termination was attempted"
     elif incomplete:

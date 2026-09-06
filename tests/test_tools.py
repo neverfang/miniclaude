@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from miniclaude.core.approval import ApprovalDecision
 from miniclaude.core.state import RuntimeState, ToolError
 from miniclaude.tools.bash_tool import run_bash
 from miniclaude.tools.file_tools import edit_file, read_file, write_file
@@ -253,3 +254,181 @@ def test_grep_empty_directory_traversal_is_bounded(state, monkeypatch):
     result = grep(state, "anything")
     assert result["truncated"]
     assert len(visited) <= 2001
+
+
+class _FakeProcess:
+    def __init__(self):
+        import io
+
+        self.stdout = io.BytesIO(b"approved output")
+        self.stderr = io.BytesIO()
+        self.returncode = 0
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -1
+
+
+def _recording_popen(monkeypatch):
+    started = []
+
+    def start(*args, **kwargs):
+        started.append((args, kwargs))
+        return _FakeProcess()
+
+    monkeypatch.setattr("miniclaude.tools.bash_tool.subprocess.Popen", start)
+    return started
+
+
+def test_risky_inline_command_without_handler_fails_closed(tmp_path, monkeypatch):
+    runtime = RuntimeState(tmp_path, allow_shell=True, approval_mode="inline")
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "pip install flask")
+
+    assert result["ok"] is False
+    assert result["requires_approval"] is True
+    assert result["approved"] is False
+    assert result["risk_level"] == "risky"
+    assert started == []
+
+
+def test_inline_approval_emits_request_and_resolution(tmp_path, monkeypatch):
+    events = []
+    requests = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="inline",
+        approval_handler=lambda request: requests.append(request) or ApprovalDecision(True),
+        event_handler=events.append,
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "pip install flask")
+
+    assert result["ok"] is True
+    assert result["approved"] is True
+    assert result["requires_approval"] is True
+    assert len(started) == 1
+    assert requests[0].command == "pip install flask"
+    assert [event["type"] for event in events] == [
+        "approval_requested",
+        "approval_resolved",
+    ]
+    assert events[1]["approval_id"] == events[0]["approval_id"]
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        lambda request: ApprovalDecision(False, "no"),
+        lambda request: True,
+    ],
+)
+def test_inline_rejection_or_invalid_decision_does_not_start_process(
+    tmp_path, monkeypatch, handler
+):
+    events = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="inline",
+        approval_handler=handler,
+        event_handler=events.append,
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "uv add flask")
+
+    assert result["ok"] is False
+    assert result["approved"] is False
+    assert started == []
+    assert events[-1]["type"] == "approval_resolved"
+
+
+def test_inline_handler_exception_fails_closed(tmp_path, monkeypatch):
+    def broken_handler(request):
+        raise RuntimeError("secret provider detail")
+
+    events = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="inline",
+        approval_handler=broken_handler,
+        event_handler=events.append,
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "npm install")
+
+    assert result["ok"] is False
+    assert "secret provider detail" not in result["error"]
+    assert started == []
+    assert events[-1]["approved"] is False
+
+
+@pytest.mark.parametrize(
+    "mode,expected_ok,expected_started",
+    [("auto", True, 1), ("deny", False, 0)],
+)
+def test_noninteractive_modes_resolve_risky_commands(
+    tmp_path, monkeypatch, mode, expected_ok, expected_started
+):
+    events = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode=mode,
+        event_handler=events.append,
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "curl https://example.test/file")
+
+    assert result["ok"] is expected_ok
+    assert len(started) == expected_started
+    assert events[-1]["type"] == "approval_resolved"
+    assert events[-1]["approved"] is expected_ok
+
+
+def test_blocked_command_never_executes_even_in_auto_mode(tmp_path, monkeypatch):
+    calls = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="auto",
+        approval_handler=lambda request: calls.append(request) or ApprovalDecision(True),
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "git reset --hard")
+
+    assert result["ok"] is False
+    assert result["risk_level"] == "blocked"
+    assert result["requires_approval"] is False
+    assert calls == []
+    assert started == []
+
+
+def test_safe_command_bypasses_approval_handler(tmp_path, monkeypatch):
+    calls = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="inline",
+        approval_handler=lambda request: calls.append(request) or ApprovalDecision(False),
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "python --version")
+
+    assert result["ok"] is True
+    assert calls == []
+    assert len(started) == 1
