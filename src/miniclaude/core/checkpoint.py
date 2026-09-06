@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import subprocess
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from miniclaude.core.paths import protected_part
 from miniclaude.core.sanitize import sanitize_for_persistence
+from miniclaude.core.snapshot import WorkspaceSnapshotStore
 from miniclaude.core.state import RuntimeState
 
 CHECKPOINT_FORMAT_VERSION = 1
@@ -217,10 +219,53 @@ class CheckpointManager:
         self.task = task
         self.mode = runtime.checkpoint_mode
         self.root = self.workspace / ".miniclaude" / "checkpoints"
+        self.snapshot_git_dir = self.root / "snapshot.git"
+        self._snapshot_store = WorkspaceSnapshotStore(
+            runtime,
+            self.snapshot_git_dir,
+            lambda *args, **kwargs: self._run_git(*args, **kwargs),
+        )
 
     @property
     def enabled(self) -> bool:
         return self.mode != "off"
+
+    def _run_git(
+        self,
+        *args: str,
+        use_repo: bool = True,
+    ) -> subprocess.CompletedProcess[bytes]:
+        command = ["git"]
+        if use_repo:
+            command.extend(
+                [
+                    f"--git-dir={self.snapshot_git_dir}",
+                    f"--work-tree={self.workspace}",
+                ]
+            )
+        command.extend(args)
+        return subprocess.run(
+            command,
+            cwd=self.workspace,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+
+    def _snapshot_workspace(self, manifest: Mapping[str, object]) -> dict[str, object]:
+        try:
+            return self._snapshot_store.save(manifest)
+        except Exception as exc:
+            return {
+                "commit": "",
+                "restorable": False,
+                "error": f"Workspace snapshot failed ({type(exc).__name__})",
+            }
+
+    def restore_workspace(self, commit: str) -> dict[str, object]:
+        manifest = workspace_manifest(self.workspace)
+        return self._snapshot_store.restore(commit, manifest)
 
     def save(
         self,
@@ -234,6 +279,7 @@ class CheckpointManager:
             return None
 
         manifest = workspace_manifest(self.workspace)
+        snapshot = self._snapshot_workspace(manifest)
         payload: dict[str, object] = {
             "format_version": CHECKPOINT_FORMAT_VERSION,
             "checkpoint_id": uuid4().hex[:12],
@@ -244,8 +290,9 @@ class CheckpointManager:
             "resume_node": "contextual_supervisor",
             "saved_at": datetime.now(UTC).isoformat(),
             "trace_id": self.runtime.trace_id,
-            "snapshot_commit": "",
-            "snapshot_restorable": False,
+            "snapshot_commit": snapshot["commit"],
+            "snapshot_restorable": snapshot["restorable"],
+            "snapshot_error": snapshot["error"],
             "state": serialize_resume_state(state),
             "manifest": manifest,
         }
@@ -271,6 +318,7 @@ class CheckpointManager:
             "mode": self.mode,
             "path": f".miniclaude/checkpoints/{CHECKPOINT_FILE}",
             "file_count": len(manifest["files"]),
-            "snapshot_commit": "",
-            "snapshot_restorable": False,
+            "snapshot_commit": snapshot["commit"],
+            "snapshot_restorable": snapshot["restorable"],
+            "snapshot_error": snapshot["error"],
         }
