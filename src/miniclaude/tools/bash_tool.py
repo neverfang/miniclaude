@@ -64,7 +64,7 @@ def _emit_runtime_event(state: RuntimeState, event: dict[str, object]) -> None:
 
 
 def _approval_result(state: RuntimeState, command: str) -> dict[str, object] | None:
-    risk = classify_command_risk(command)
+    risk = classify_command_risk(command, workspace=state.workspace)
     if risk.level == "safe":
         return None
 
@@ -91,9 +91,10 @@ def _approval_result(state: RuntimeState, command: str) -> dict[str, object] | N
         _emit_runtime_event(state, {"type": "approval_resolved", **result})
         return result
 
+    skip_render = bool(getattr(state.approval_handler, "_renders_approval_events", False))
     _emit_runtime_event(
         state,
-        {"type": "approval_requested", **base, "command": command},
+        {"type": "approval_requested", **base, "command": command, "_skip_render": skip_render},
     )
     try:
         decision = state.approval_handler(request)
@@ -101,7 +102,9 @@ def _approval_result(state: RuntimeState, command: str) -> dict[str, object] | N
     except Exception:
         approved = False
     resolved = {**base, "approved": approved}
-    _emit_runtime_event(state, {"type": "approval_resolved", **resolved})
+    _emit_runtime_event(
+        state, {"type": "approval_resolved", **resolved, "_skip_render": skip_render}
+    )
     if not approved:
         return {
             **resolved,

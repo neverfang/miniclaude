@@ -325,3 +325,16 @@ def test_approval_panel_redacts_credential_like_command():
 
     assert "secret-value" not in output
     assert "[REDACTED]" in output
+
+
+def test_inline_approval_events_marked_as_already_rendered_are_not_duplicated():
+    output = rendered(
+        {
+            "type": "approval_requested",
+            "risk_reason": "Network download",
+            "command": "curl x",
+            "_skip_render": True,
+        }
+    )
+
+    assert output == ""

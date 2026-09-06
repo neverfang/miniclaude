@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from miniclaude.core.checkpoint import (
     CHECKPOINT_FORMAT_VERSION,
@@ -75,6 +75,28 @@ def test_strict_checkpoint_adds_state_and_events(tmp_path):
     assert state["task"] == "build app"
     assert "runtime" not in state
     assert events == [{"type": "tool_result", "result": {"ok": True}}]
+
+
+def test_strict_checkpoint_sanitizes_all_message_metadata(tmp_path):
+    runtime = RuntimeState(tmp_path, checkpoint_mode="strict")
+    manager = CheckpointManager(runtime, task="build app")
+    state = _state(runtime)
+    state["messages"] = [
+        ToolMessage(
+            content="ok",
+            tool_call_id="Bearer exposed-secret",
+            name="token=another-secret",
+            id="api_key=third-secret",
+        )
+    ]
+
+    manager.save(state, status="running", latest_node="codeAgent")
+
+    persisted = (manager.root / "state.json").read_text(encoding="utf-8")
+    assert "exposed-secret" not in persisted
+    assert "another-secret" not in persisted
+    assert "third-secret" not in persisted
+    assert "[REDACTED]" in persisted
 
 
 def test_checkpoint_off_writes_nothing(tmp_path):

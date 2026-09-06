@@ -25,6 +25,14 @@ def _atomic_write_bytes(path: Path, content: bytes) -> None:
             temporary.unlink()
 
 
+class WorkspaceRestoreError(RuntimeError):
+    """A restore failed after a recoverable pre-restore backup was created."""
+
+    def __init__(self, backup_commit: str):
+        self.backup_commit = backup_commit
+        super().__init__(f"Workspace restore failed; backup snapshot: {backup_commit}")
+
+
 class WorkspaceSnapshotStore:
     """Commit eligible workspace files without touching a user's Git repository."""
 
@@ -108,14 +116,17 @@ class WorkspaceSnapshotStore:
         if not backup.get("restorable") or not backup.get("commit"):
             raise RuntimeError("pre-restore workspace snapshot failed")
 
-        listing = self._output("ls-tree", "-r", "--name-only", "-z", commit)
-        decoded_paths = [
-            item.decode("utf-8", errors="strict") for item in listing.split(b"\0") if item
-        ]
-        targets = [(path, workspace_path(self.runtime, path)) for path in decoded_paths]
-        for relative, target in targets:
-            content = self._output("show", f"{commit}:{relative}")
-            _atomic_write_bytes(target, content)
+        try:
+            listing = self._output("ls-tree", "-r", "--name-only", "-z", commit)
+            decoded_paths = [
+                item.decode("utf-8", errors="strict") for item in listing.split(b"\0") if item
+            ]
+            targets = [(path, workspace_path(self.runtime, path)) for path in decoded_paths]
+            for relative, target in targets:
+                content = self._output("show", f"{commit}:{relative}")
+                _atomic_write_bytes(target, content)
+        except Exception:
+            raise WorkspaceRestoreError(str(backup["commit"])) from None
         return {
             "type": "restore_completed",
             "target_commit": commit,

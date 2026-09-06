@@ -318,6 +318,8 @@ def _checkpoint_saved(event: dict) -> Panel:
             _section("Latest node", event.get("latest_node", "unknown")),
             _section("Artifact", event.get("path", ".miniclaude/checkpoints/checkpoint.json")),
             _section("Files", event.get("file_count", "unknown")),
+            _section("Restorable", "yes" if event.get("snapshot_restorable") else "no"),
+            _section("Snapshot", event.get("snapshot_error") or "available"),
         ),
         title=Text("Checkpoint Saved"),
         border_style="cyan",
@@ -402,6 +404,8 @@ EVENT_RENDERERS = {
 
 def render_event(console: Console, event: dict) -> None:
     """Render one event without interpreting untrusted Rich markup."""
+    if event.get("_skip_render"):
+        return
     kind = event.get("type", "unknown")
     if kind == "react_event":
         nested = event.get("event", {})

@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from miniclaude.core.checkpoint import CheckpointManager
+from miniclaude.core.snapshot import WorkspaceRestoreError
 from miniclaude.core.state import RuntimeState
 from miniclaude.graph.state import initial_graph_state
 
@@ -148,3 +149,24 @@ def test_snapshot_failure_keeps_checkpoint_but_marks_it_nonrestorable(tmp_path, 
     assert event["snapshot_commit"] == ""
     assert event["snapshot_error"] == "Workspace snapshot failed (OSError)"
     assert (manager.root / "checkpoint.json").exists()
+
+
+def test_restore_failure_reports_pre_restore_backup_commit(tmp_path, monkeypatch):
+    runtime = RuntimeState(tmp_path, checkpoint_mode="light")
+    manager = CheckpointManager(runtime, task="build")
+    target = tmp_path / "app.py"
+    target.write_text("v1", encoding="utf-8")
+    saved = manager.save(_state(runtime))
+    target.write_text("manual", encoding="utf-8")
+
+    def fail_write(path, content):
+        raise OSError("private path")
+
+    monkeypatch.setattr("miniclaude.core.snapshot._atomic_write_bytes", fail_write)
+
+    with pytest.raises(WorkspaceRestoreError) as caught:
+        manager.restore_workspace(saved["snapshot_commit"])
+
+    assert caught.value.backup_commit
+    assert caught.value.backup_commit in str(caught.value)
+    assert "private path" not in str(caught.value)

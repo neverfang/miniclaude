@@ -73,6 +73,14 @@ class HarnessRunner:
             return []
         events = [saved]
         events.extend(self._record_trace_event(saved))
+        snapshot_error = saved.get("snapshot_error")
+        if snapshot_error:
+            warning = {
+                "type": "checkpoint_warning",
+                "message": "Checkpoint state saved, but workspace snapshot is not restorable",
+            }
+            events.append(warning)
+            events.extend(self._record_trace_event(warning))
         return events
 
     def start(self, state: Mapping[str, object]) -> list[dict[str, object]]:

@@ -312,3 +312,44 @@ def test_resume_error_has_usage_exit_code_without_secret(monkeypatch, tmp_path):
     assert result.exit_code == 2
     assert "Resume failed (ValueError)" in result.output
     assert "private checkpoint content" not in result.output
+
+
+def test_inline_approval_input_error_renders_fail_closed_resolution(monkeypatch):
+    from io import StringIO
+    from pathlib import Path
+
+    from rich.console import Console
+
+    from miniclaude.cli.app import make_inline_approval_handler
+    from miniclaude.core.approval import ApprovalRequest
+
+    output = StringIO()
+    console = Console(file=output, force_terminal=True, color_system=None)
+    monkeypatch.setattr(
+        cli_module.Confirm,
+        "ask",
+        lambda *args, **kwargs: (_ for _ in ()).throw(EOFError()),
+    )
+    handler = make_inline_approval_handler(console)
+
+    decision = handler(
+        ApprovalRequest(
+            id="approval-1",
+            command="curl https://example.test",
+            risk_level="risky",
+            risk_reason="Network download command",
+            workspace=Path.cwd(),
+        )
+    )
+
+    assert decision.approved is False
+    assert "Approval Denied" in output.getvalue()
+
+
+def test_restore_failure_uses_resume_error_exit_code_and_reports_backup(monkeypatch, tmp_path):
+    from miniclaude.core.snapshot import WorkspaceRestoreError
+
+    install_fake_workflow_events(
+        monkeypatch,
+        FakeWorkflowEvents(error=WorkspaceRestoreError("a" * 40)),
+    )

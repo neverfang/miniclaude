@@ -12,6 +12,7 @@ from rich.text import Text
 from miniclaude.cli.render import render_event
 from miniclaude.core.agent import stream_workflow_events
 from miniclaude.core.approval import ApprovalDecision, ApprovalRequest
+from miniclaude.core.snapshot import WorkspaceRestoreError
 from miniclaude.providers.openai_provider import create_model
 
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
@@ -34,15 +35,17 @@ def make_inline_approval_handler(console: Console):
                 False, "Inline approval denied in a non-interactive terminal"
             )
         else:
-            approved = Confirm.ask(
-                "Approve this exact command?",
-                default=False,
-                console=console,
-            )
-            decision = ApprovalDecision(
-                approved,
-                "Approved interactively" if approved else "Denied interactively",
-            )
+            try:
+                approved = Confirm.ask(
+                    "Approve this exact command?", default=False, console=console
+                )
+            except Exception:
+                decision = ApprovalDecision(False, "Inline approval input failed")
+            else:
+                decision = ApprovalDecision(
+                    approved,
+                    "Approved interactively" if approved else "Denied interactively",
+                )
         render_event(
             console,
             {
@@ -53,6 +56,8 @@ def make_inline_approval_handler(console: Console):
             },
         )
         return decision
+
+    decide._renders_approval_events = True
 
     return decide
 
@@ -164,6 +169,14 @@ def main(
             raise typer.Exit(2) from None
         console.print(Text(f"Run failed ({type(exc).__name__})", style="red"))
         raise typer.Exit(1) from None
+    except WorkspaceRestoreError as exc:
+        console.print(
+            Text(
+                f"Resume restore failed; pre-restore backup snapshot: {exc.backup_commit}",
+                style="red",
+            )
+        )
+        raise typer.Exit(2) from None
     except Exception as exc:
         console.print(
             Text(

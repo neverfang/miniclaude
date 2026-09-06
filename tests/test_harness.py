@@ -3,9 +3,10 @@ from miniclaude.core.state import RuntimeState
 
 
 class FakeCheckpoint:
-    def __init__(self, calls, *, fail=False):
+    def __init__(self, calls, *, fail=False, snapshot_error=""):
         self.calls = calls
         self.fail = fail
+        self.snapshot_error = snapshot_error
 
     def save(self, state, *, status="running", latest_node=None, event=None):
         if self.fail:
@@ -15,6 +16,8 @@ class FakeCheckpoint:
             "type": "checkpoint_saved",
             "status": status,
             "latest_node": latest_node,
+            "snapshot_restorable": not bool(self.snapshot_error),
+            "snapshot_error": self.snapshot_error,
         }
 
 
@@ -123,6 +126,25 @@ def test_harness_storage_failures_become_sanitized_warnings(tmp_path):
 
     assert {event["type"] for event in events} == {"trace_warning", "checkpoint_warning"}
     assert all("private" not in event["message"] for event in events)
+
+
+def test_snapshot_failure_emits_visible_checkpoint_warning(tmp_path):
+    runtime = RuntimeState(tmp_path)
+    harness = HarnessRunner(
+        runtime,
+        task="build",
+        checkpoint=FakeCheckpoint([], snapshot_error="private snapshot detail"),
+        trace=FakeTrace([]),
+    )
+
+    events = harness.start({"task": "build"})
+
+    assert [event["type"] for event in events] == [
+        "trace_started",
+        "checkpoint_saved",
+        "checkpoint_warning",
+    ]
+    assert "private snapshot detail" not in events[-1]["message"]
 
 
 def test_harness_finish_is_idempotent(tmp_path):

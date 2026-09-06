@@ -86,7 +86,7 @@ def workspace_identity(workspace: Path) -> str:
 def _serialize_message(message: BaseMessage) -> dict[str, object]:
     common: dict[str, object] = {
         "content": sanitize_for_persistence(message.content),
-        "id": message.id,
+        "id": sanitize_for_persistence(message.id),
     }
     if isinstance(message, HumanMessage):
         return {"type": "human", **common}
@@ -102,8 +102,8 @@ def _serialize_message(message: BaseMessage) -> dict[str, object]:
         return {
             "type": "tool",
             **common,
-            "tool_call_id": message.tool_call_id,
-            "name": message.name,
+            "tool_call_id": sanitize_for_persistence(message.tool_call_id),
+            "name": sanitize_for_persistence(message.name),
         }
     return {"type": "unsupported", "class": type(message).__name__}
 
@@ -123,7 +123,10 @@ def serialize_resume_state(state: Mapping[str, object]) -> dict[str, object]:
             ]
         else:
             serialized[field] = sanitize_for_persistence(value)
-    return serialized
+    clean = sanitize_for_persistence(serialized)
+    if not isinstance(clean, dict):
+        raise TypeError("Sanitized checkpoint state must be a mapping")
+    return clean
 
 
 def workspace_manifest(workspace: Path) -> dict[str, object]:
