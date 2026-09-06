@@ -191,3 +191,124 @@ def test_workflow_setup_failure_is_safe(monkeypatch):
     assert result.exit_code == 1
     assert "Run failed (RuntimeError)" in result.output
     assert "secret setup detail" not in result.output
+
+
+def test_cli_stage_five_defaults(monkeypatch, tmp_path):
+    workflow_events = FakeWorkflowEvents()
+    calls = install_fake_workflow_events(monkeypatch, workflow_events)
+
+    result = runner.invoke(app, ["task", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["approval_mode"] == "inline"
+    assert calls[0]["checkpoint_mode"] == "light"
+    assert calls[0]["trace_mode"] == "on"
+    assert calls[0]["resume_workspace"] is None
+    assert calls[0]["restore_workspace"] is False
+
+
+def test_restore_workspace_requires_resume(monkeypatch):
+    monkeypatch.setattr(
+        cli_module,
+        "create_model",
+        lambda **kwargs: pytest.fail("model should not be created"),
+    )
+
+    result = runner.invoke(app, ["task", "--restore-workspace"])
+
+    assert result.exit_code == 2
+    assert "--resume" in result.output
+
+
+def test_resume_allows_omitted_task_and_uses_resume_workspace(monkeypatch, tmp_path):
+    calls = install_fake_workflow_events(monkeypatch, FakeWorkflowEvents())
+
+    result = runner.invoke(app, ["--resume", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["workspace"] == tmp_path
+    assert calls[0]["resume_workspace"] == tmp_path
+    assert calls[0]["restore_workspace"] is False
+
+
+def test_resume_rejects_conflicting_workspace_before_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        cli_module,
+        "create_model",
+        lambda **kwargs: pytest.fail("model should not be created"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "task",
+            "--resume",
+            str(tmp_path / "resume"),
+            "--workspace",
+            str(tmp_path / "other"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "workspace" in result.output.lower()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["task", "--approval-mode", "sometimes"],
+        ["task", "--checkpoint-mode", "always"],
+        ["task", "--trace-mode", "verbose"],
+    ],
+)
+def test_stage_five_mode_validation_happens_before_model(monkeypatch, arguments):
+    monkeypatch.setattr(
+        cli_module,
+        "create_model",
+        lambda **kwargs: pytest.fail("model should not be created"),
+    )
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 2
+
+
+def test_inline_approval_denies_without_tty():
+    from io import StringIO
+    from pathlib import Path
+
+    from rich.console import Console
+
+    from miniclaude.cli.app import make_inline_approval_handler
+    from miniclaude.core.approval import ApprovalRequest
+
+    output = StringIO()
+    console = Console(file=output, force_terminal=False, color_system=None)
+    handler = make_inline_approval_handler(console)
+    request = ApprovalRequest(
+        id="approval-1",
+        command="curl https://example.test",
+        risk_level="risky",
+        risk_reason="Network download command",
+        workspace=Path.cwd(),
+    )
+
+    decision = handler(request)
+
+    assert decision.approved is False
+    assert "non-interactive" in decision.reason.lower()
+    assert "Approval Required" in output.getvalue()
+    assert "Approval Denied" in output.getvalue()
+
+
+def test_resume_error_has_usage_exit_code_without_secret(monkeypatch, tmp_path):
+    install_fake_workflow_events(
+        monkeypatch,
+        FakeWorkflowEvents(error=ValueError("private checkpoint content")),
+    )
+
+    result = runner.invoke(app, ["--resume", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert "Resume failed (ValueError)" in result.output
+    assert "private checkpoint content" not in result.output

@@ -7,6 +7,8 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
+from miniclaude.core.sanitize import sanitize_for_persistence
+
 DISPLAY_LIMIT = 2000
 
 
@@ -277,7 +279,112 @@ def _final(event: dict) -> Panel:
     )
 
 
+def _safe_command(value: object) -> str:
+    clean = sanitize_for_persistence({"command": value})
+    if isinstance(clean, dict):
+        return _bounded(clean.get("command", ""))
+    return "[REDACTED]"
+
+
+def _approval_requested(event: dict) -> Panel:
+    return Panel(
+        _stack(
+            _section("Risk", event.get("risk_reason", "Unknown risk")),
+            _section("Command", _safe_command(event.get("command", ""))),
+        ),
+        title=Text("Approval Required"),
+        border_style="yellow",
+        padding=(0, 1),
+    )
+
+
+def _approval_resolved(event: dict) -> Panel:
+    approved = bool(event.get("approved"))
+    return Panel(
+        _stack(
+            _section("Decision", "approved" if approved else "denied"),
+            _section("Risk", event.get("risk_reason", "Unknown risk")),
+        ),
+        title=Text("Approval Granted" if approved else "Approval Denied"),
+        border_style="green" if approved else "red",
+        padding=(0, 1),
+    )
+
+
+def _checkpoint_saved(event: dict) -> Panel:
+    return Panel(
+        _stack(
+            _section("Status", event.get("status", "unknown")),
+            _section("Latest node", event.get("latest_node", "unknown")),
+            _section("Artifact", event.get("path", ".miniclaude/checkpoints/checkpoint.json")),
+            _section("Files", event.get("file_count", "unknown")),
+        ),
+        title=Text("Checkpoint Saved"),
+        border_style="cyan",
+        padding=(0, 1),
+    )
+
+
+def _resume_loaded(event: dict) -> Panel:
+    return Panel(
+        _stack(
+            _section("Latest node", event.get("latest_node", "unknown")),
+            _section("Resume node", event.get("resume_node", "contextual_supervisor")),
+            _section("Workspace drift", "yes" if event.get("workspace_drift") else "no"),
+            _section("Drift counts", event.get("drift", {})),
+        ),
+        title=Text("Resume Loaded"),
+        border_style="yellow" if event.get("workspace_drift") else "green",
+        padding=(0, 1),
+    )
+
+
+def _trace_started(event: dict) -> Panel:
+    return Panel(
+        _section("Trace ID", event.get("trace_id", "unknown")),
+        title=Text("Trace Started"),
+        border_style="cyan",
+        padding=(0, 1),
+    )
+
+
+def _trace_summary(event: dict) -> Panel:
+    return Panel(
+        _stack(
+            _section("Trace ID", event.get("trace_id", "unknown")),
+            _section("Status", event.get("status", "unknown")),
+            _section("Latest node", event.get("latest_node", "unknown")),
+            _section("Duration", f"{event.get('duration_ms', 0)} ms"),
+            _section("Node visits", event.get("node_visits", {})),
+            _section("Tool calls", event.get("tool_calls", 0)),
+            _section("Approvals", event.get("approval_count", 0)),
+            _section("Checkpoints", event.get("checkpoint_count", 0)),
+        ),
+        title=Text("Trace Summary"),
+        border_style="green" if event.get("status") == "passed" else "yellow",
+        padding=(0, 1),
+    )
+
+
+def _harness_warning(event: dict) -> Panel:
+    return Panel(
+        Text(_bounded(event.get("message", "Harness persistence warning"))),
+        title=Text("Harness Warning"),
+        border_style="yellow",
+        padding=(0, 1),
+    )
+
+
 EVENT_RENDERERS = {
+    "approval_requested": _approval_requested,
+    "approval_resolved": _approval_resolved,
+    "checkpoint_saved": _checkpoint_saved,
+    "checkpoint_warning": _harness_warning,
+    "resume_loaded": _resume_loaded,
+    "resume_warning": _harness_warning,
+    "trace_started": _trace_started,
+    "trace_summary": _trace_summary,
+    "trace_warning": _harness_warning,
     "tool_call": _tool_call,
     "tool_result": _tool_result,
     "planner": _planner,

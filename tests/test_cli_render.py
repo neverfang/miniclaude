@@ -1,5 +1,6 @@
 from io import BytesIO, StringIO, TextIOWrapper
 
+import pytest
 from rich.console import Console
 
 from miniclaude.cli.render import render_event
@@ -262,5 +263,65 @@ def test_context_events_are_safe_on_windows_gbk_console():
         },
     )
     stream.flush()
-
     assert "Context Monitor" in raw.getvalue().decode("gbk")
+
+
+@pytest.mark.parametrize(
+    ("event", "title"),
+    [
+        (
+            {
+                "type": "approval_requested",
+                "risk_reason": "Network download",
+                "command": "curl x",
+            },
+            "Approval Required",
+        ),
+        (
+            {
+                "type": "approval_resolved",
+                "approved": False,
+                "risk_reason": "Network download",
+            },
+            "Approval Denied",
+        ),
+        (
+            {
+                "type": "checkpoint_saved",
+                "status": "running",
+                "latest_node": "supervisor",
+            },
+            "Checkpoint Saved",
+        ),
+        (
+            {
+                "type": "resume_loaded",
+                "latest_node": "supervisor",
+                "workspace_drift": False,
+            },
+            "Resume Loaded",
+        ),
+        (
+            {"type": "trace_summary", "trace_id": "abc", "status": "passed"},
+            "Trace Summary",
+        ),
+    ],
+)
+def test_stage_five_panels(event, title):
+    output = rendered(event)
+
+    assert title in output
+    assert "Unsupported event" not in output
+
+
+def test_approval_panel_redacts_credential_like_command():
+    output = rendered(
+        {
+            "type": "approval_requested",
+            "risk_reason": "Network download",
+            "command": "curl --token=secret-value https://example.test",
+        }
+    )
+
+    assert "secret-value" not in output
+    assert "[REDACTED]" in output
