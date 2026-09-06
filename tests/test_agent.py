@@ -271,6 +271,8 @@ def test_workflow_stream_normalizes_updates_and_nested_react_events(tmp_path):
             model=object(),
             workflow=workflow,
             max_attempts=2,
+            checkpoint_mode="off",
+            trace_mode="off",
         )
     )
 
@@ -367,7 +369,14 @@ def test_stage3_stream_normalizes_supervisor_handoffs_and_specialists(tmp_path):
             yield "updates", {"final": {"final_answer": "verified"}}
 
     events = list(
-        stream_workflow_events("task", workspace=tmp_path, model=object(), workflow=FakeWorkflow())
+        stream_workflow_events(
+            "task",
+            workspace=tmp_path,
+            model=object(),
+            workflow=FakeWorkflow(),
+            checkpoint_mode="off",
+            trace_mode="off",
+        )
     )
     kinds = [event["type"] for event in events]
     assert kinds == [
@@ -416,7 +425,14 @@ def test_stage4_stream_passes_through_context_events(tmp_path):
             yield "updates", {"final": {"final_answer": "done"}}
 
     events = list(
-        stream_workflow_events("task", workspace=tmp_path, model=object(), workflow=FakeWorkflow())
+        stream_workflow_events(
+            "task",
+            workspace=tmp_path,
+            model=object(),
+            workflow=FakeWorkflow(),
+            checkpoint_mode="off",
+            trace_mode="off",
+        )
     )
 
     assert [event["type"] for event in events] == [

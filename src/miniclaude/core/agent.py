@@ -167,19 +167,34 @@ def stream_workflow_events(
     model: ChatModel | None = None,
     env_file: Path | None = None,
     workflow=None,
+    approval_mode: str = "inline",
+    approval_handler=None,
+    checkpoint_mode: str = "light",
+    trace_mode: str = "on",
+    harness_factory=None,
 ) -> Iterator[dict]:
-    """Build and stream the Stage 4 workflow as stable application events."""
+    """Build and stream the Stage 4 workflow through the Stage 5 harness."""
     if not task.strip() or not 1 <= max_loops <= 100 or not 1 <= max_attempts <= 10:
         raise ValueError("invalid task, max_loops, or max_attempts")
 
     # Local imports avoid a module cycle because graph nodes reuse stream_agent_events.
+    from miniclaude.core.harness import HarnessRunner
     from miniclaude.graph.stage4_workflow import build_stage4_workflow
     from miniclaude.graph.state import initial_graph_state
     from miniclaude.tools.web_search_tool import build_web_search_tool
 
     configured_model = create_model(env_file=env_file) if model is None else model
-    runtime = RuntimeState(workspace=workspace, allow_shell=allow_shell)
+    runtime = RuntimeState(
+        workspace=workspace,
+        allow_shell=allow_shell,
+        approval_mode=approval_mode,
+        approval_handler=approval_handler,
+        checkpoint_mode=checkpoint_mode,
+        trace_mode=trace_mode,
+    )
     state = initial_graph_state(task, runtime=runtime, max_attempts=max_attempts)
+    harness_type = HarnessRunner if harness_factory is None else harness_factory
+    harness = harness_type(runtime, task)
     compiled = workflow or build_stage4_workflow(
         supervisor_model=configured_model,
         verifier_model=configured_model,
@@ -195,14 +210,29 @@ def stream_workflow_events(
         "workspace": str(runtime.workspace),
         "allow_shell": runtime.allow_shell,
     }
+    yield from harness.start(state)
     completed_attempts = 0
     last_passed = False
-    for mode, chunk in compiled.stream(
-        state,
-        stream_mode=["updates", "custom"],
-        config={"recursion_limit": max_attempts * 6 + 12},
-    ):
+    latest_node = "start"
+
+    def harnessed_stream():
+        try:
+            yield from compiled.stream(
+                state,
+                stream_mode=["updates", "custom"],
+                config={"recursion_limit": max_attempts * 6 + 12},
+            )
+        except KeyboardInterrupt:
+            harness.interrupt(latest_node=latest_node, state=state)
+            raise
+        except BaseException:
+            harness.fail(latest_node=latest_node, state=state)
+            raise
+
+    for mode, chunk in harnessed_stream():
+        yield from harness.drain_runtime_events()
         if mode == "custom":
+            harness_events = harness.record_custom_event(chunk, state)
             kind = chunk.get("type")
             role_by_kind = {
                 "supervisor_event": "supervisor",
@@ -232,12 +262,15 @@ def stream_workflow_events(
                 }
             elif kind in {"context_monitor", "context_compressor"}:
                 yield chunk
+            yield from harness_events
             continue
         if mode != "updates" or not isinstance(chunk, dict):
             continue
         for node, update in chunk.items():
             if not isinstance(update, dict):
                 continue
+            latest_node = node
+            state.update(update)
             if node == "planner":
                 yield {
                     "type": "planner",
@@ -285,3 +318,13 @@ def stream_workflow_events(
                     "passed": last_passed,
                     "content": update.get("final_answer", ""),
                 }
+            yield from harness.record_graph_update(node, update, state)
+
+    summary = harness.finish(
+        status="passed" if last_passed else "failed",
+        latest_node=latest_node,
+        state=state,
+    )
+    yield from harness.drain_runtime_events()
+    if summary is not None:
+        yield summary
