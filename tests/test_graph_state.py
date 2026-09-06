@@ -42,6 +42,30 @@ def test_initial_graph_state_has_bounded_retry_defaults(tmp_path):
     assert state["passed"] is False
 
 
+def test_runtime_has_stage_five_defaults(tmp_path):
+    runtime = RuntimeState(tmp_path / "workspace")
+
+    assert runtime.approval_mode == "inline"
+    assert runtime.approval_handler is None
+    assert runtime.checkpoint_mode == "light"
+    assert runtime.trace_mode == "on"
+    assert runtime.trace_id is None
+    assert runtime.event_handler is None
+
+
+@pytest.mark.parametrize(
+    "field,value,error",
+    [
+        ("approval_mode", "unknown", "approval mode"),
+        ("checkpoint_mode", "sometimes", "checkpoint mode"),
+        ("trace_mode", "verbose", "trace mode"),
+    ],
+)
+def test_runtime_rejects_invalid_harness_modes(tmp_path, field, value, error):
+    with pytest.raises(ValueError, match=error):
+        RuntimeState(tmp_path / field, **{field: value})
+
+
 def test_initial_graph_state_has_independent_stage_three_defaults(tmp_path):
     first = initial_graph_state("first", runtime=RuntimeState(tmp_path / "first"))
     second = initial_graph_state("second", runtime=RuntimeState(tmp_path / "second"))

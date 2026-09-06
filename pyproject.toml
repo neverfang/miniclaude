@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "miniclaude"
-version = "0.4.0"
-description = "An educational MultiAgent coding workflow with specialist handoffs"
+version = "0.5.0"
+description = "An educational MultiAgent workflow with harness safety and tracing"
 requires-python = ">=3.11"
 dependencies = [
   "langchain-core>=1.0,<2",
