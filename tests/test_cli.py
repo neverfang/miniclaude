@@ -207,6 +207,19 @@ def test_cli_stage_five_defaults(monkeypatch, tmp_path):
     assert calls[0]["restore_workspace"] is False
 
 
+def test_cli_all_approval_mode_installs_handler_and_reaches_workflow(monkeypatch, tmp_path):
+    calls = install_fake_workflow_events(monkeypatch, FakeWorkflowEvents())
+
+    result = runner.invoke(
+        app,
+        ["task", "--workspace", str(tmp_path), "--approval-mode", "all"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["approval_mode"] == "all"
+    assert callable(calls[0]["approval_handler"])
+
+
 def test_restore_workspace_requires_resume(monkeypatch):
     monkeypatch.setattr(
         cli_module,

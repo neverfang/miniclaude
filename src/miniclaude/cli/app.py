@@ -79,7 +79,9 @@ def main(
     env_file: Annotated[
         Path | None, typer.Option(help="Explicit .env file; default is startup directory/.env.")
     ] = None,
-    approval_mode: Annotated[str, typer.Option(help="inline, auto, or deny.")] = "inline",
+    approval_mode: Annotated[
+        str, typer.Option(help="inline, all, auto, or deny.")
+    ] = "inline",
     checkpoint_mode: Annotated[str, typer.Option(help="light, strict, or off.")] = "light",
     trace_mode: Annotated[str, typer.Option(help="on or off.")] = "on",
     resume: Annotated[Path | None, typer.Option(help="Resume checkpoint workspace.")] = None,
@@ -91,7 +93,7 @@ def main(
     console = Console(highlight=False)
     task_value = task or ""
     valid_modes = {
-        "approval": (approval_mode, {"inline", "auto", "deny"}),
+        "approval": (approval_mode, {"inline", "all", "auto", "deny"}),
         "checkpoint": (checkpoint_mode, {"light", "strict", "off"}),
         "trace": (trace_mode, {"on", "off"}),
     }
@@ -132,7 +134,11 @@ def main(
         console.print(
             Text("WARNING: Shell is enabled. The workspace is NOT a sandbox.", style="yellow")
         )
-    approval_handler = make_inline_approval_handler(console) if approval_mode == "inline" else None
+    approval_handler = (
+        make_inline_approval_handler(console)
+        if approval_mode in {"inline", "all"}
+        else None
+    )
     failed = True
     saw_final = False
     try:

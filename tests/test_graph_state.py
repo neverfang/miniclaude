@@ -53,10 +53,16 @@ def test_runtime_has_stage_five_defaults(tmp_path):
     assert runtime.event_handler is None
 
 
+def test_runtime_accepts_all_approval_mode(tmp_path):
+    runtime = RuntimeState(tmp_path / "workspace", approval_mode="all")
+
+    assert runtime.approval_mode == "all"
+
+
 @pytest.mark.parametrize(
     "field,value,error",
     [
-        ("approval_mode", "unknown", "approval mode"),
+        ("approval_mode", "unknown", "inline, all, auto, or deny"),
         ("checkpoint_mode", "sometimes", "checkpoint mode"),
         ("trace_mode", "verbose", "trace mode"),
     ],
