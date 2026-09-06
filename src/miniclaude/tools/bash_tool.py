@@ -54,8 +54,6 @@ def _stop_tree(process: subprocess.Popen):
         process.kill()
 
 
-
-
 def _emit_runtime_event(state: RuntimeState, event: dict[str, object]) -> None:
     if state.event_handler is None:
         return
@@ -111,6 +109,8 @@ def _approval_result(state: RuntimeState, command: str) -> dict[str, object] | N
             "error": f"approval denied: {risk.reason}",
         }
     return resolved
+
+
 def run_bash(state: RuntimeState, command: str, timeout_seconds: float | None = None) -> dict:
     if not state.allow_shell:
         raise ToolError("Shell is disabled. The user must opt in with --allow-shell")

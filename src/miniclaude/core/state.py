@@ -25,6 +25,7 @@ class RuntimeState:
     trace_mode: Literal["on", "off"] = "on"
     trace_id: str | None = None
     event_handler: Callable[[dict[str, object]], None] | None = None
+
     def __post_init__(self):
         self.workspace = Path(self.workspace).resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)

@@ -258,7 +258,6 @@ def stream_workflow_events(
     for mode, chunk in harnessed_stream():
         yield from harness.drain_runtime_events()
         if mode == "custom":
-            harness_events = harness.record_custom_event(chunk, state)
             kind = chunk.get("type")
             role_by_kind = {
                 "supervisor_event": "supervisor",
@@ -267,6 +266,11 @@ def stream_workflow_events(
                 "actor_event": "actor",
                 "verifier_event": "verifier",
             }
+            trace_event = chunk
+            nested_for_trace = chunk.get("event")
+            if kind in role_by_kind and isinstance(nested_for_trace, dict):
+                trace_event = {**nested_for_trace, "role": role_by_kind[kind]}
+            harness_events = harness.record_custom_event(trace_event, state)
             if kind in role_by_kind:
                 nested = chunk.get("event", {})
                 if nested.get("type") not in {"run_start", "final_answer"}:

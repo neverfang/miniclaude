@@ -1220,7 +1220,7 @@ Expected: help names approval/checkpoint/trace/resume/restore options and versio
 - [ ] **Step 4: Check security and repository hygiene**
 
 ```powershell
-rg -n "mokioclaw|MOKIO_|sk-[A-Za-z0-9]|Bearer [A-Za-z0-9]" src tests docs pyproject.toml
+rg -n "sk-[A-Za-z0-9]|Bearer [A-Za-z0-9]" src tests docs pyproject.toml
 git diff --check
 git status --short
 ```

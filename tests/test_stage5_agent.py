@@ -161,3 +161,42 @@ def test_stage_five_checkpoints_merge_reducer_sensitive_messages(tmp_path):
         "human",
         "ai",
     ]
+
+
+def test_stage_five_trace_counts_nested_specialist_tool_events(tmp_path):
+    class ToolWorkflow:
+        def stream(self, state, **kwargs):
+            yield (
+                "custom",
+                {
+                    "type": "code_agent_event",
+                    "event": {"type": "tool_call", "name": "BashTool", "args": {}},
+                },
+            )
+            yield (
+                "custom",
+                {
+                    "type": "code_agent_event",
+                    "event": {
+                        "type": "tool_result",
+                        "name": "BashTool",
+                        "result": {"ok": False},
+                    },
+                },
+            )
+            yield "updates", {"final": {"final_answer": "not verified"}}
+
+    events = list(
+        stream_workflow_events(
+            "build",
+            workspace=tmp_path,
+            model=object(),
+            workflow=ToolWorkflow(),
+            checkpoint_mode="off",
+            trace_mode="on",
+        )
+    )
+
+    summary = next(event for event in events if event["type"] == "trace_summary")
+    assert summary["tool_calls"] == 1
+    assert summary["failed_tool_calls"] == 1

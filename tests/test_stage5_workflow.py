@@ -78,9 +78,7 @@ def _interrupt(workspace):
             )
         )
     return json.loads(
-        (workspace / ".miniclaude/checkpoints/checkpoint.json").read_text(
-            encoding="utf-8"
-        )
+        (workspace / ".miniclaude/checkpoints/checkpoint.json").read_text(encoding="utf-8")
     )
 
 
@@ -117,9 +115,7 @@ def test_stage_five_interrupt_resume_and_trace(tmp_path):
 
     trace_events = [
         json.loads(line)
-        for line in (
-            tmp_path / ".miniclaude/traces" / summary["trace_id"] / "events.jsonl"
-        )
+        for line in (tmp_path / ".miniclaude/traces" / summary["trace_id"] / "events.jsonl")
         .read_text(encoding="utf-8")
         .splitlines()
     ]
