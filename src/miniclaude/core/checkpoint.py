@@ -322,3 +322,250 @@ class CheckpointManager:
             "snapshot_restorable": snapshot["restorable"],
             "snapshot_error": snapshot["error"],
         }
+
+    @staticmethod
+    def _normalized_task(value: str) -> str:
+        return " ".join(value.split())
+
+    @staticmethod
+    def _resume_message(record: object) -> BaseMessage:
+        if not isinstance(record, Mapping):
+            raise ValueError("Invalid checkpoint message record")
+        kind = record.get("type")
+        content = record.get("content", "")
+        message_id = record.get("id")
+        if not isinstance(content, (str, list)):
+            raise ValueError("Invalid checkpoint message content")
+        if message_id is not None and not isinstance(message_id, str):
+            raise ValueError("Invalid checkpoint message id")
+        try:
+            if kind == "human":
+                return HumanMessage(content=content, id=message_id)
+            if kind == "system":
+                return SystemMessage(content=content, id=message_id)
+            if kind == "ai":
+                tool_calls = record.get("tool_calls", [])
+                if not isinstance(tool_calls, list):
+                    raise ValueError("Invalid checkpoint message tool calls")
+                return AIMessage(content=content, id=message_id, tool_calls=tool_calls)
+            if kind == "tool":
+                tool_call_id = record.get("tool_call_id")
+                name = record.get("name")
+                if not isinstance(tool_call_id, str) or not tool_call_id:
+                    raise ValueError("Invalid checkpoint tool message id")
+                if name is not None and not isinstance(name, str):
+                    raise ValueError("Invalid checkpoint tool message name")
+                return ToolMessage(
+                    content=content,
+                    id=message_id,
+                    tool_call_id=tool_call_id,
+                    name=name,
+                )
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Invalid checkpoint message ({type(exc).__name__})") from None
+        raise ValueError("Unsupported checkpoint message type")
+
+    @staticmethod
+    def _manifest_drift(
+        saved_manifest: object,
+        current_manifest: Mapping[str, object],
+    ) -> dict[str, int]:
+        if not isinstance(saved_manifest, Mapping):
+            raise ValueError("Invalid checkpoint manifest")
+        saved_files = saved_manifest.get("files")
+        current_files = current_manifest.get("files")
+        if not isinstance(saved_files, list) or not isinstance(current_files, list):
+            raise ValueError("Invalid checkpoint manifest files")
+
+        def indexed(files: list[object]) -> dict[str, str]:
+            result: dict[str, str] = {}
+            for entry in files:
+                if not isinstance(entry, Mapping):
+                    raise ValueError("Invalid checkpoint manifest entry")
+                path = entry.get("path")
+                digest = entry.get("sha256")
+                if not isinstance(path, str) or not isinstance(digest, str):
+                    raise ValueError("Invalid checkpoint manifest entry")
+                result[path] = digest
+            return result
+
+        saved = indexed(saved_files)
+        current = indexed(current_files)
+        shared = saved.keys() & current.keys()
+        return {
+            "added": len(current.keys() - saved.keys()),
+            "removed": len(saved.keys() - current.keys()),
+            "modified": sum(saved[path] != current[path] for path in shared),
+        }
+
+    def load_resume_inputs(
+        self,
+        runtime: RuntimeState,
+        *,
+        task: str | None = None,
+        restore_workspace: bool = False,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Validate a checkpoint and rebuild fresh graph inputs for safe resume."""
+        path = self.root / CHECKPOINT_FILE
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid checkpoint data ({type(exc).__name__})") from None
+        if not isinstance(payload, Mapping):
+            raise ValueError("Invalid checkpoint schema")
+        version = payload.get("format_version")
+        if not isinstance(version, int) or isinstance(version, bool):
+            raise ValueError("Invalid checkpoint version")
+        if version != CHECKPOINT_FORMAT_VERSION:
+            raise ValueError("Unsupported checkpoint version")
+        if payload.get("workspace_id") != workspace_identity(runtime.workspace):
+            raise ValueError("Checkpoint workspace does not match")
+        if payload.get("resume_node") != "contextual_supervisor":
+            raise ValueError("Invalid checkpoint resume node")
+
+        stored_task = payload.get("task")
+        stored_state = payload.get("state")
+        if not isinstance(stored_task, str) or not stored_task.strip():
+            raise ValueError("Invalid checkpoint task")
+        if not isinstance(stored_state, Mapping):
+            raise ValueError("Invalid checkpoint state")
+        state_task = stored_state.get("task")
+        if not isinstance(state_task, str):
+            raise ValueError("Invalid checkpoint state task")
+        normalized_task = self._normalized_task(stored_task)
+        if self._normalized_task(state_task) != normalized_task:
+            raise ValueError("Checkpoint task mismatch")
+        requested_task = task if task is not None else self.task
+        if requested_task and self._normalized_task(requested_task) != normalized_task:
+            raise ValueError("Checkpoint task mismatch")
+
+        max_attempts = stored_state.get("max_attempts", 3)
+        attempts = stored_state.get("attempts", 0)
+        if (
+            not isinstance(max_attempts, int)
+            or isinstance(max_attempts, bool)
+            or not 1 <= max_attempts <= 10
+        ):
+            raise ValueError("Invalid checkpoint maximum attempts")
+        if (
+            not isinstance(attempts, int)
+            or isinstance(attempts, bool)
+            or not 0 <= attempts <= max_attempts
+        ):
+            raise ValueError("Invalid checkpoint attempts")
+
+        string_fields = {
+            "plan_summary",
+            "verification_reason",
+            "last_error",
+            "last_actor_summary",
+            "final_answer",
+            "research_notes",
+            "code_agent_summary",
+            "supervisor_summary",
+            "context_summary",
+            "context_next_node",
+            "context_error",
+            "context_count_method",
+            "history_summary",
+        }
+        bool_fields = {"passed", "context_should_compress"}
+        int_fields = {"context_token_count", "context_token_limit"}
+        string_list_fields = {"acceptance_criteria", "verification_commands"}
+        mapping_list_fields = {
+            "todos",
+            "verification_results",
+            "verification_checks",
+            "sources",
+            "agent_handoffs",
+            "compression_events",
+        }
+        mapping_fields = {"memory_snapshot"}
+
+        from miniclaude.graph.state import initial_graph_state
+
+        inputs: dict[str, object] = dict(
+            initial_graph_state(
+                normalized_task,
+                runtime=runtime,
+                max_attempts=max_attempts,
+            )
+        )
+        inputs["attempts"] = attempts
+        for field in string_fields:
+            if field not in stored_state:
+                continue
+            value = stored_state[field]
+            if not isinstance(value, str):
+                raise ValueError(f"Invalid checkpoint state field: {field}")
+            inputs[field] = value
+        for field in bool_fields:
+            if field not in stored_state:
+                continue
+            value = stored_state[field]
+            if not isinstance(value, bool):
+                raise ValueError(f"Invalid checkpoint state field: {field}")
+            inputs[field] = value
+        for field in int_fields:
+            if field not in stored_state:
+                continue
+            value = stored_state[field]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"Invalid checkpoint state field: {field}")
+            inputs[field] = value
+        for field in string_list_fields:
+            if field not in stored_state:
+                continue
+            value = stored_state[field]
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError(f"Invalid checkpoint state field: {field}")
+            inputs[field] = json.loads(json.dumps(value))
+        for field in mapping_list_fields:
+            if field not in stored_state:
+                continue
+            value = stored_state[field]
+            if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
+                raise ValueError(f"Invalid checkpoint state field: {field}")
+            inputs[field] = json.loads(json.dumps(value))
+        for field in mapping_fields:
+            if field not in stored_state:
+                continue
+            value = stored_state[field]
+            if not isinstance(value, Mapping):
+                raise ValueError(f"Invalid checkpoint state field: {field}")
+            inputs[field] = json.loads(json.dumps(value))
+
+        messages = stored_state.get("messages", [])
+        if not isinstance(messages, list):
+            raise ValueError("Invalid checkpoint messages")
+        inputs["messages"] = [self._resume_message(record) for record in messages]
+
+        restore_event = None
+        if restore_workspace:
+            snapshot_commit = payload.get("snapshot_commit")
+            if not isinstance(snapshot_commit, str) or not snapshot_commit:
+                raise ValueError("Checkpoint has no restorable snapshot commit")
+            restore_event = self.restore_workspace(snapshot_commit)
+
+        current_manifest = workspace_manifest(runtime.workspace)
+        drift = self._manifest_drift(payload.get("manifest"), current_manifest)
+        inputs["context_next_node"] = "verifier"
+        inputs["context_should_compress"] = False
+        inputs["context_error"] = ""
+        inputs["passed"] = False
+        inputs["final_answer"] = ""
+
+        event: dict[str, object] = {
+            "type": "resume_loaded",
+            "checkpoint_id": payload.get("checkpoint_id", ""),
+            "latest_node": payload.get("latest_node", "unknown"),
+            "resume_node": "contextual_supervisor",
+            "previous_trace_id": payload.get("trace_id"),
+            "workspace_drift": any(drift.values()),
+            "drift": drift,
+        }
+        if restore_event is not None:
+            event["restore"] = restore_event
+        return inputs, event

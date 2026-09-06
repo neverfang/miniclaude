@@ -80,3 +80,19 @@ def test_sanitize_keeps_safe_scalars_and_hides_absolute_paths():
     assert clean["not_finite"] == "[NON_FINITE_NUMBER]"
     assert clean["relative"] == "src/app.py"
     assert clean["absolute"] == "[ABSOLUTE_PATH]"
+
+
+def test_sanitize_keeps_bounded_internal_token_metrics():
+    clean = sanitize_for_persistence(
+        {
+            "context_token_count": 12_345,
+            "context_token_limit": 400_000,
+            "access_token": "secret-value",
+        }
+    )
+
+    assert clean == {
+        "context_token_count": 12_345,
+        "context_token_limit": 400_000,
+        "access_token": "[REDACTED]",
+    }

@@ -17,11 +17,14 @@ class HarnessRunner:
         *,
         checkpoint: CheckpointManager | None = None,
         trace: TraceRecorder | None = None,
+        resumed_from_trace_id: str | None = None,
     ):
         self.runtime = runtime
         self.task = task
         self.checkpoint = checkpoint or CheckpointManager(runtime, task)
-        self.trace = trace or TraceRecorder(runtime, task)
+        self.trace = trace or TraceRecorder(
+            runtime, task, resumed_from_trace_id=resumed_from_trace_id
+        )
         self.runtime.trace_id = getattr(self.trace, "trace_id", runtime.trace_id)
         self.runtime.event_handler = self.record_runtime_event
         self._state: Mapping[str, object] = {}
@@ -103,9 +106,7 @@ class HarnessRunner:
             "error",
         }:
             node = "approval" if str(event.get("type", "")).startswith("approval_") else "event"
-            events.extend(
-                self._save_checkpoint(status="running", latest_node=node, event=event)
-            )
+            events.extend(self._save_checkpoint(status="running", latest_node=node, event=event))
         return events
 
     def record_runtime_event(self, event: dict[str, object]) -> None:
@@ -134,9 +135,7 @@ class HarnessRunner:
             warning = self._trace_warning()
             if warning is not None:
                 events.append(warning)
-        events.extend(
-            self._save_checkpoint(status="running", latest_node=node, event=graph_event)
-        )
+        events.extend(self._save_checkpoint(status="running", latest_node=node, event=graph_event))
         return events
 
     def finish(
@@ -150,9 +149,7 @@ class HarnessRunner:
             return None
         self._finished = True
         self._state = state
-        self._runtime_events.extend(
-            self._save_checkpoint(status=status, latest_node=latest_node)
-        )
+        self._runtime_events.extend(self._save_checkpoint(status=status, latest_node=latest_node))
         try:
             summary = self.trace.end(
                 status=status,

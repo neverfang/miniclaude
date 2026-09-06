@@ -145,3 +145,142 @@ def test_recovery_guide_contains_safe_resume_commands(tmp_path):
     assert "codeAgent" in guide
     assert "miniclaude --resume" in guide
     assert "--restore-workspace" in guide
+
+
+def _saved_resume_checkpoint(tmp_path):
+    runtime = RuntimeState(tmp_path, checkpoint_mode="light", trace_mode="off")
+    manager = CheckpointManager(runtime, task="build")
+    state = initial_graph_state("build", runtime=runtime, max_attempts=3)
+    state.update(
+        {
+            "attempts": 1,
+            "todos": [
+                {
+                    "id": "code",
+                    "content": "Write code",
+                    "status": "in_progress",
+                    "note": "continue",
+                }
+            ],
+            "sources": [
+                {
+                    "title": "docs",
+                    "url": "https://example.test",
+                    "content": "facts",
+                    "score": 0.9,
+                }
+            ],
+            "agent_handoffs": [
+                {
+                    "from_agent": "supervisor",
+                    "to_agent": "codeAgent",
+                    "instruction": "build",
+                    "result": "partial",
+                    "ok": True,
+                }
+            ],
+            "compression_events": [
+                {
+                    "before_tokens": 500_000,
+                    "after_tokens": 10_000,
+                    "removed_messages": 4,
+                    "attempt": 1,
+                    "used_fallback": False,
+                }
+            ],
+            "messages": [HumanMessage(content="build"), AIMessage(content="working")],
+            "last_error": "interrupted",
+            "context_next_node": "final",
+            "context_should_compress": True,
+            "context_error": "old",
+            "passed": True,
+            "final_answer": "stale",
+        }
+    )
+    (tmp_path / "app.py").write_text("v1", encoding="utf-8")
+    manager.save(state, status="interrupted", latest_node="codeAgent")
+    return manager, runtime
+
+
+def test_resume_rebuilds_runtime_and_supported_graph_state(tmp_path):
+    manager, old_runtime = _saved_resume_checkpoint(tmp_path)
+    new_runtime = RuntimeState(
+        old_runtime.workspace,
+        allow_shell=True,
+        approval_mode="deny",
+        checkpoint_mode="light",
+        trace_mode="on",
+    )
+
+    inputs, event = manager.load_resume_inputs(new_runtime)
+
+    assert inputs["runtime"] is new_runtime
+    assert inputs["task"] == "build"
+    assert inputs["attempts"] == 1
+    assert inputs["max_attempts"] == 3
+    assert inputs["context_next_node"] == "verifier"
+    assert inputs["context_should_compress"] is False
+    assert inputs["context_error"] == ""
+    assert inputs["passed"] is False
+    assert inputs["final_answer"] == ""
+    assert [message.type for message in inputs["messages"]] == ["human", "ai"]
+    assert inputs["todos"][0]["content"] == "Write code"
+    assert inputs["sources"][0]["title"] == "docs"
+    assert inputs["agent_handoffs"][0]["to_agent"] == "codeAgent"
+    assert inputs["compression_events"][0]["after_tokens"] == 10_000
+    assert event["type"] == "resume_loaded"
+    assert event["resume_node"] == "contextual_supervisor"
+    assert event["workspace_drift"] is False
+
+    inputs["todos"][0]["content"] = "changed"
+    payload = json.loads((manager.root / "checkpoint.json").read_text(encoding="utf-8"))
+    assert payload["state"]["todos"][0]["content"] == "Write code"
+
+
+def test_resume_rejects_invalid_json_and_task_mismatch(tmp_path):
+    manager, runtime = _saved_resume_checkpoint(tmp_path)
+
+    with pytest.raises(ValueError, match="task"):
+        manager.load_resume_inputs(runtime, task="different")
+
+    (manager.root / "checkpoint.json").write_text("{bad", encoding="utf-8")
+    with pytest.raises(ValueError, match="checkpoint"):
+        manager.load_resume_inputs(runtime)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda payload: payload.update(format_version=999), "version"),
+        (lambda payload: payload.update(workspace_id="foreign"), "workspace"),
+        (lambda payload: payload["state"].update(attempts=99), "attempt"),
+        (
+            lambda payload: payload["state"].update(
+                messages=[{"type": "unsupported", "content": "x", "id": None}]
+            ),
+            "message",
+        ),
+        (lambda payload: payload.update(state=[]), "state"),
+    ],
+)
+def test_resume_rejects_corrupt_or_foreign_checkpoint(tmp_path, mutation, message):
+    manager, runtime = _saved_resume_checkpoint(tmp_path)
+    path = manager.root / "checkpoint.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    mutation(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        manager.load_resume_inputs(runtime)
+
+
+def test_resume_reports_manifest_drift_without_file_content(tmp_path):
+    manager, runtime = _saved_resume_checkpoint(tmp_path)
+    (tmp_path / "app.py").write_text("manual v2", encoding="utf-8")
+    (tmp_path / "extra.py").write_text("new", encoding="utf-8")
+
+    _, event = manager.load_resume_inputs(runtime)
+
+    assert event["workspace_drift"] is True
+    assert event["drift"] == {"added": 1, "removed": 0, "modified": 1}
+    assert "manual v2" not in json.dumps(event)

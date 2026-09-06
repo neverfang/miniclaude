@@ -15,6 +15,10 @@ _SECRET_FIELD = re.compile(
     r"(?:^|[_-])(?:api[_-]?key|key|token|secret|password|authorization|credential|cookie)(?:$|[_-])",
     re.IGNORECASE,
 )
+_SAFE_SECRET_LIKE_FIELDS = {
+    "context_token_count",
+    "context_token_limit",
+}
 _INLINE_PATTERNS = (
     (
         re.compile(r"\bBearer\s+[^\s'\"]+", re.IGNORECASE),
@@ -63,7 +67,7 @@ def _sanitize(
     seen: set[int],
     field_name: str,
 ) -> object:
-    if _SECRET_FIELD.search(field_name):
+    if field_name not in _SAFE_SECRET_LIKE_FIELDS and _SECRET_FIELD.search(field_name):
         return REDACTED
     if depth > MAX_PERSISTED_DEPTH:
         return "[MAX_DEPTH]"

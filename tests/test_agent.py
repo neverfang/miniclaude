@@ -470,3 +470,66 @@ def test_default_workflow_builds_stage_four_with_one_model(tmp_path, monkeypatch
     assert options["context_counter"] is model
     assert captured["state"]["context_token_limit"] == 400_000
     assert captured["stream_options"]["config"]["recursion_limit"] > 10
+
+
+def test_workflow_stream_resumes_semantic_state_without_overwriting_drift(tmp_path):
+    from miniclaude.core.agent import stream_workflow_events
+    from miniclaude.core.checkpoint import CheckpointManager
+    from miniclaude.core.state import RuntimeState
+    from miniclaude.graph.state import initial_graph_state
+
+    old_runtime = RuntimeState(tmp_path, checkpoint_mode="light", trace_mode="off")
+    old_runtime.trace_id = "trace-before-interrupt"
+    state = initial_graph_state("build", runtime=old_runtime, max_attempts=3)
+    state.update(
+        {
+            "attempts": 1,
+            "plan_summary": "continue safely",
+            "last_error": "interrupted",
+        }
+    )
+    manager = CheckpointManager(old_runtime, task="build")
+    target = tmp_path / "app.py"
+    target.write_text("checkpoint version", encoding="utf-8")
+    manager.save(state, status="interrupted", latest_node="codeAgent")
+    target.write_text("manual version", encoding="utf-8")
+    captured = {}
+
+    class ResumeWorkflow:
+        def stream(self, inputs, **kwargs):
+            captured["state"] = dict(inputs)
+            yield (
+                "updates",
+                {
+                    "verifier": {
+                        "attempts": 2,
+                        "passed": True,
+                        "verification_reason": "done",
+                        "verification_checks": [],
+                        "verification_results": [],
+                    }
+                },
+            )
+            yield "updates", {"final": {"final_answer": "verified"}}
+
+    events = list(
+        stream_workflow_events(
+            "build",
+            workspace=tmp_path,
+            model=object(),
+            workflow=ResumeWorkflow(),
+            resume_workspace=tmp_path,
+            checkpoint_mode="off",
+            trace_mode="on",
+        )
+    )
+
+    assert any(event["type"] == "resume_loaded" for event in events)
+    assert captured["state"]["runtime"].workspace == tmp_path.resolve()
+    assert captured["state"]["attempts"] == 1
+    assert captured["state"]["plan_summary"] == "continue safely"
+    assert captured["state"]["passed"] is False
+    assert captured["state"]["context_next_node"] == "verifier"
+    assert target.read_text(encoding="utf-8") == "manual version"
+    summary = next(event for event in events if event["type"] == "trace_summary")
+    assert summary["resumed_from_trace_id"] == "trace-before-interrupt"

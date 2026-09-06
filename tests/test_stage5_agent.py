@@ -105,10 +105,59 @@ def test_stage_five_interrupt_finalizes_harness(tmp_path):
     else:
         raise AssertionError("KeyboardInterrupt was not propagated")
 
-    checkpoint = (tmp_path / ".miniclaude/checkpoints/checkpoint.json").read_text(
-        encoding="utf-8"
-    )
+    checkpoint = (tmp_path / ".miniclaude/checkpoints/checkpoint.json").read_text(encoding="utf-8")
     assert '"status": "interrupted"' in checkpoint
     trace_files = list((tmp_path / ".miniclaude/traces").glob("*/trace.json"))
     assert len(trace_files) == 1
     assert '"status": "interrupted"' in trace_files[0].read_text(encoding="utf-8")
+
+
+def test_stage_five_checkpoints_merge_reducer_sensitive_messages(tmp_path):
+    import json
+
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    class MessageWorkflow:
+        def stream(self, state, **kwargs):
+            yield (
+                "updates",
+                {
+                    "contextual_supervisor": {
+                        "messages": [HumanMessage(content="first")],
+                        "plan_summary": "continue",
+                    }
+                },
+            )
+            yield (
+                "updates",
+                {
+                    "verifier": {
+                        "messages": [AIMessage(content="second")],
+                        "attempts": 1,
+                        "passed": True,
+                        "verification_reason": "done",
+                        "verification_checks": [],
+                        "verification_results": [],
+                    }
+                },
+            )
+            yield "updates", {"final": {"final_answer": "verified"}}
+
+    list(
+        stream_workflow_events(
+            "build",
+            workspace=tmp_path,
+            model=object(),
+            workflow=MessageWorkflow(),
+            checkpoint_mode="light",
+            trace_mode="off",
+        )
+    )
+
+    payload = json.loads(
+        (tmp_path / ".miniclaude/checkpoints/checkpoint.json").read_text(encoding="utf-8")
+    )
+    assert [message["type"] for message in payload["state"]["messages"]] == [
+        "human",
+        "ai",
+    ]

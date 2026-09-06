@@ -171,13 +171,24 @@ def stream_workflow_events(
     approval_handler=None,
     checkpoint_mode: str = "light",
     trace_mode: str = "on",
+    resume_workspace: Path | None = None,
+    restore_workspace: bool = False,
     harness_factory=None,
 ) -> Iterator[dict]:
     """Build and stream the Stage 4 workflow through the Stage 5 harness."""
-    if not task.strip() or not 1 <= max_loops <= 100 or not 1 <= max_attempts <= 10:
+    if restore_workspace and resume_workspace is None:
+        raise ValueError("restore_workspace requires resume_workspace")
+    if (
+        (not task.strip() and resume_workspace is None)
+        or not 1 <= max_loops <= 100
+        or not 1 <= max_attempts <= 10
+    ):
         raise ValueError("invalid task, max_loops, or max_attempts")
 
     # Local imports avoid a module cycle because graph nodes reuse stream_agent_events.
+    from langgraph.graph.message import add_messages
+
+    from miniclaude.core.checkpoint import CheckpointManager
     from miniclaude.core.harness import HarnessRunner
     from miniclaude.graph.stage4_workflow import build_stage4_workflow
     from miniclaude.graph.state import initial_graph_state
@@ -192,9 +203,21 @@ def stream_workflow_events(
         checkpoint_mode=checkpoint_mode,
         trace_mode=trace_mode,
     )
-    state = initial_graph_state(task, runtime=runtime, max_attempts=max_attempts)
+    resume_event = None
+    if resume_workspace is not None:
+        if Path(resume_workspace).resolve() != runtime.workspace:
+            raise ValueError("resume workspace and workspace must match")
+        resume_manager = CheckpointManager(runtime, task=task)
+        state, resume_event = resume_manager.load_resume_inputs(
+            runtime, task=task or None, restore_workspace=restore_workspace
+        )
+    else:
+        state = initial_graph_state(task, runtime=runtime, max_attempts=max_attempts)
     harness_type = HarnessRunner if harness_factory is None else harness_factory
-    harness = harness_type(runtime, task)
+    harness_options = {}
+    if resume_event is not None and isinstance(resume_event.get("previous_trace_id"), str):
+        harness_options["resumed_from_trace_id"] = resume_event["previous_trace_id"]
+    harness = harness_type(runtime, str(state["task"]), **harness_options)
     compiled = workflow or build_stage4_workflow(
         supervisor_model=configured_model,
         verifier_model=configured_model,
@@ -211,7 +234,10 @@ def stream_workflow_events(
         "allow_shell": runtime.allow_shell,
     }
     yield from harness.start(state)
-    completed_attempts = 0
+    if resume_event is not None:
+        yield resume_event
+        yield from harness.record_custom_event(resume_event, state)
+    completed_attempts = int(state.get("attempts", 0))
     last_passed = False
     latest_node = "start"
 
@@ -270,7 +296,12 @@ def stream_workflow_events(
             if not isinstance(update, dict):
                 continue
             latest_node = node
+            merged_messages = None
+            if "messages" in update:
+                merged_messages = add_messages(state.get("messages", []), update["messages"])
             state.update(update)
+            if merged_messages is not None:
+                state["messages"] = merged_messages
             if node == "planner":
                 yield {
                     "type": "planner",
