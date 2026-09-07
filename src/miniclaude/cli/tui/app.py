@@ -116,8 +116,6 @@ class MiniclaudeTuiApp(App):
                     conversation.append_user(content)
                 elif item.get("role") == "assistant":
                     conversation.append_assistant(content)
-        else:
-            conversation._refresh_content()
         self.query_one(SessionSidebar).update_state(self.view_state)
         self.query_one("#prompt", Input).focus()
 

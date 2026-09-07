@@ -78,6 +78,22 @@ Header {
     overflow-y: auto;
 }
 
+.conversation-message {
+    height: auto;
+    min-height: 3;
+    margin-bottom: 1;
+    padding: 1 2;
+    background: #111a1d;
+}
+
+.user-message {
+    border-left: thick #2f8f83;
+}
+
+.assistant-message {
+    border-left: thick #56b6c2;
+}
+
 #session-sidebar {
     width: 32;
     height: 1fr;

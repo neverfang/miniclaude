@@ -78,27 +78,31 @@ class EventStream(VerticalScroll):
         self.remove_children()
 
 
-class ConversationPanel(Static):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._entries: list[str] = []
+class ConversationMessage(Static):
+    pass
 
-    def _refresh_content(self) -> None:
-        content = "\n\n".join(self._entries) if self._entries else "Conversation"
-        self.update(Text(content))
+
+class ConversationPanel(VerticalScroll):
+    def append_user(self, content: str) -> None:
+        self.mount(
+            ConversationMessage(
+                Text(f"You\n{_bounded(content)}"),
+                classes="conversation-message user-message",
+            )
+        )
         self.scroll_end(animate=False, force=True)
 
-    def append_user(self, content: str) -> None:
-        self._entries.append(f"You\n{_bounded(content)}")
-        self._refresh_content()
-
     def append_assistant(self, content: str) -> None:
-        self._entries.append(f"Miniclaude\n{_bounded(content)}")
-        self._refresh_content()
+        self.mount(
+            ConversationMessage(
+                Text(f"Miniclaude\n{_bounded(content)}"),
+                classes="conversation-message assistant-message",
+            )
+        )
+        self.scroll_end(animate=False, force=True)
 
     def clear_conversation(self) -> None:
-        self._entries.clear()
-        self._refresh_content()
+        self.remove_children()
 
 
 class SessionSidebar(Static):

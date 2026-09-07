@@ -12,6 +12,13 @@ from miniclaude.core.session import (
 )
 
 
+def conversation_text(app):
+    return "\n".join(
+        message.render().plain
+        for message in app.query(".conversation-message")
+    )
+
+
 def fake_turn_stream(task, **kwargs):
     yield {"type": "session_status", "status": "running"}
     yield {
@@ -88,7 +95,8 @@ def test_continued_session_renders_persisted_conversation(tmp_path):
         )
         async with app.run_test() as pilot:
             await pilot.pause()
-            rendered = app.query_one("#conversation").render().plain
+            assert len(app.query(".conversation-message")) == 2
+            rendered = conversation_text(app)
             assert "persisted question" in rendered
             assert "persisted model answer" in rendered
 
@@ -108,7 +116,7 @@ def test_tool_call_and_result_render_as_separate_cards(tmp_path):
             await pilot.pause()
             assert len(app.query(".tool-call-card")) == 1
             assert len(app.query(".tool-result-card")) == 1
-            assert "done" in app.query_one("#conversation").render().plain
+            assert "done" in conversation_text(app)
 
     asyncio.run(scenario())
 
@@ -170,7 +178,8 @@ def test_two_chat_turns_keep_every_user_and_model_message_visible(tmp_path):
             await pilot.pause()
             await submit(pilot, "second question")
             await pilot.pause()
-            rendered = app.query_one("#conversation").render().plain
+            assert len(app.query(".conversation-message")) == 4
+            rendered = conversation_text(app)
             assert "first question" in rendered
             assert "first answer" in rendered
             assert "second question" in rendered
