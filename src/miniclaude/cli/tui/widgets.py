@@ -144,6 +144,8 @@ class SessionSidebar(Static):
             f"turns       {state.turns}",
             f"session     {state.session_id}",
             f"route       {state.route}",
+            f"shell       {'enabled' if state.shell_enabled else 'disabled'}",
+            f"approval    {state.approval_mode}",
             f"workspace   {workspace}",
             f"checkpoint  {state.checkpoint}",
             f"trace       {state.trace_id}",

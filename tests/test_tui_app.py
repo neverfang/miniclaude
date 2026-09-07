@@ -268,3 +268,26 @@ def test_slash_prefix_shows_bounded_suggestions(tmp_path):
             assert "/status" in suggestions.render().plain
 
     asyncio.run(scenario())
+
+
+def test_slash_approve_changes_only_live_runtime_policy(tmp_path):
+    async def scenario():
+        app = MiniclaudeTuiApp(
+            session=create_session(tmp_path),
+            startup_directory=tmp_path,
+            turn_stream=fake_turn_stream,
+            workflow_options={"allow_shell": False, "approval_mode": "inline"},
+        )
+        async with app.run_test() as pilot:
+            await submit(pilot, "/approve all")
+            assert app.workflow_options["allow_shell"] is True
+            assert app.workflow_options["approval_mode"] == "all"
+            sidebar = app.query_one("#session-sidebar").render().plain
+            assert "shell       enabled" in sidebar
+            assert "approval    all" in sidebar
+
+            await submit(pilot, "/approve deny")
+            assert app.workflow_options["allow_shell"] is False
+            assert app.workflow_options["approval_mode"] == "deny"
+
+    asyncio.run(scenario())

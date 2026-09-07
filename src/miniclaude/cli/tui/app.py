@@ -91,6 +91,8 @@ class MiniclaudeTuiApp(App):
             session["session_id"],
             session["workspace"],
             turns=session["turn_index"],
+            shell_enabled=bool(self.workflow_options.get("allow_shell", False)),
+            approval_mode=str(self.workflow_options.get("approval_mode", "inline")),
         )
         self._turn_active = False
         self._active_worker = None
@@ -192,6 +194,19 @@ class MiniclaudeTuiApp(App):
                 selected = result.action.partition(":")[2]
                 self.session["active_skill"] = "" if selected == "off" else selected
                 save_session(self.startup_directory, self.session)
+            elif result.action and result.action.startswith("approval-mode:"):
+                mode = result.action.partition(":")[2]
+                self.workflow_options["approval_mode"] = mode
+                self.workflow_options["allow_shell"] = mode != "deny"
+                self.view_state = reduce_session_event(
+                    self.view_state,
+                    {
+                        "type": "runtime_policy",
+                        "shell_enabled": mode != "deny",
+                        "approval_mode": mode,
+                    },
+                )
+                self.query_one(SessionSidebar).update_state(self.view_state)
             elif result.action == "exit":
                 self.exit()
                 return
@@ -309,6 +324,8 @@ class MiniclaudeTuiApp(App):
         self.view_state = initial_session_view(
             self.session["session_id"],
             self.session["workspace"],
+            shell_enabled=bool(self.workflow_options.get("allow_shell", False)),
+            approval_mode=str(self.workflow_options.get("approval_mode", "inline")),
         )
         self.query_one(SessionSidebar).update_state(self.view_state)
         self.action_clear_visuals()

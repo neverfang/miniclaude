@@ -44,3 +44,20 @@ def test_sidebar_reducer_completes_and_clears_pending_approval():
     assert state.status == "completed"
     assert state.approval_pending is False
     assert state.turns == 1
+
+
+def test_sidebar_reducer_tracks_runtime_policy():
+    state = initial_session_view(
+        "abc123def456",
+        Path("workspace"),
+        shell_enabled=False,
+        approval_mode="inline",
+    )
+
+    state = reduce_session_event(
+        state,
+        {"type": "runtime_policy", "shell_enabled": True, "approval_mode": "all"},
+    )
+
+    assert state.shell_enabled is True
+    assert state.approval_mode == "all"

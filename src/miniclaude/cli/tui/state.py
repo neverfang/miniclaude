@@ -13,6 +13,8 @@ class SessionViewState:
     status: str = "idle"
     turns: int = 0
     route: str = "(none)"
+    shell_enabled: bool = False
+    approval_mode: str = "inline"
     checkpoint: str = "(waiting)"
     trace_id: str = "(waiting)"
     tool_calls: int = 0
@@ -30,11 +32,15 @@ def initial_session_view(
     workspace: Path,
     *,
     turns: int = 0,
+    shell_enabled: bool = False,
+    approval_mode: str = "inline",
 ) -> SessionViewState:
     return SessionViewState(
         session_id=session_id,
         workspace=Path(workspace),
         turns=turns,
+        shell_enabled=shell_enabled,
+        approval_mode=approval_mode,
     )
 
 
@@ -59,6 +65,11 @@ def reduce_session_event(
         changes["status"] = str(event.get("status", state.status))
     elif kind == "intent_decision":
         changes["route"] = str(event.get("route", state.route))
+    elif kind == "runtime_policy":
+        changes.update(
+            shell_enabled=bool(event.get("shell_enabled", state.shell_enabled)),
+            approval_mode=str(event.get("approval_mode", state.approval_mode)),
+        )
     elif kind == "approval_requested":
         changes.update(
             status="waiting approval",
