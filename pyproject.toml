@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "miniclaude"
-version = "0.5.0"
+version = "0.6.0"
 description = "An educational MultiAgent workflow with harness safety and tracing"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,6 +16,7 @@ dependencies = [
   "regex>=2024.11.6,<2027",
   "langgraph>=1.0,<2",
   "tavily-python>=0.8,<1",
+  "textual>=8.2,<9",
 ]
 
 [project.scripts]
