@@ -16,15 +16,76 @@ def isolate_config(tmp_path, monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-def test_help_and_missing_task():
+def test_help_includes_stage_six_session_options():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
     assert "--workspace" in result.output
     assert "--allow-shell" in result.output
     assert "--max-attempts" in result.output
-    assert "stage-four" in result.output
+    assert "--continue" in result.output
+    assert "--session" in result.output
     assert "context-token" not in result.output
-    assert runner.invoke(app, []).exit_code != 0
+
+
+def install_fake_tui(monkeypatch):
+    calls = []
+
+    def fake_launch_tui(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(cli_module, "launch_tui", fake_launch_tui)
+    monkeypatch.setattr(cli_module, "create_model", lambda **kwargs: OneAnswer())
+    return calls
+
+
+def test_no_task_launches_a_new_tui_session(monkeypatch):
+    calls = install_fake_tui(monkeypatch)
+
+    result = runner.invoke(app, [])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["selection"] == "new"
+
+
+@pytest.mark.parametrize("flag", ["-c", "--continue"])
+def test_continue_launches_latest_session(monkeypatch, flag):
+    calls = install_fake_tui(monkeypatch)
+
+    result = runner.invoke(app, [flag])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["selection"] == "latest"
+
+
+def test_explicit_session_launches_named_session(monkeypatch):
+    calls = install_fake_tui(monkeypatch)
+
+    result = runner.invoke(app, ["--session", "abc123def456"])
+
+    assert result.exit_code == 0, result.output
+    assert calls[0]["selection"] == "explicit"
+    assert calls[0]["session_id"] == "abc123def456"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["task", "--continue"],
+        ["--resume", "work", "--continue"],
+        ["--session", "abc123def456", "--continue"],
+    ],
+)
+def test_session_modes_reject_ambiguous_combinations_before_model(
+    monkeypatch,
+    arguments,
+):
+    monkeypatch.setattr(
+        cli_module,
+        "create_model",
+        lambda **kwargs: pytest.fail("no model"),
+    )
+
+    assert runner.invoke(app, arguments).exit_code == 2
 
 
 def test_missing_config_does_not_create_workspace(tmp_path):

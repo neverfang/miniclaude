@@ -18,6 +18,14 @@ from miniclaude.providers.openai_provider import create_model
 app = typer.Typer(add_completion=False, pretty_exceptions_enable=False)
 
 
+def launch_tui(**kwargs):
+    """Lazy import keeps the one-shot CLI independent from Textual startup."""
+
+    from miniclaude.cli.tui.app import launch_tui as run_tui
+
+    return run_tui(**kwargs)
+
+
 def make_inline_approval_handler(console: Console):
     """Build a fail-closed interactive approval callback for risky commands."""
 
@@ -88,8 +96,16 @@ def main(
     restore_workspace: Annotated[
         bool, typer.Option(help="Restore checkpoint files before resume.")
     ] = False,
+    continue_session: Annotated[
+        bool,
+        typer.Option("--continue", "-c", help="Continue the latest interactive Session."),
+    ] = False,
+    session_id: Annotated[
+        str | None,
+        typer.Option("--session", help="Open an interactive Session by its 12-character ID."),
+    ] = None,
 ):
-    """Run the stage-four workflow with the stage-five execution harness."""
+    """Launch Stage 6 Sessions or run the one-shot workflow harness."""
     console = Console(highlight=False)
     task_value = task or ""
     valid_modes = {
@@ -105,8 +121,48 @@ def main(
     if restore_workspace and resume is None:
         console.print(Text("--restore-workspace requires --resume", style="red"))
         raise typer.Exit(2)
+    session_modes = int(continue_session) + int(session_id is not None)
+    if session_modes > 1:
+        console.print(Text("--continue and --session are mutually exclusive", style="red"))
+        raise typer.Exit(2)
+    if (continue_session or session_id is not None) and (
+        task_value.strip() or resume is not None
+    ):
+        console.print(
+            Text(
+                "Interactive Session options cannot be combined with a task or --resume",
+                style="red",
+            )
+        )
+        raise typer.Exit(2)
+    if session_id is not None:
+        import re
+
+        if re.fullmatch(r"[a-f0-9]{12}", session_id) is None:
+            console.print(
+                Text(
+                    "--session requires 12 lowercase hexadecimal characters",
+                    style="red",
+                )
+            )
+            raise typer.Exit(2)
+
+    tui_selection = None
     if resume is None and not task_value.strip():
-        console.print(Text("Task must not be empty unless --resume is used", style="red"))
+        tui_selection = (
+            "latest"
+            if continue_session
+            else "explicit"
+            if session_id is not None
+            else "new"
+        )
+    if tui_selection is not None and workspace is not None:
+        console.print(
+            Text(
+                "--workspace is not used by interactive Sessions; start in that directory instead",
+                style="red",
+            )
+        )
         raise typer.Exit(2)
 
     if resume is not None:
@@ -129,6 +185,33 @@ def main(
     except Exception as exc:
         console.print(Text(f"Model configuration failed ({type(exc).__name__})", style="red"))
         raise typer.Exit(2) from None
+
+    if tui_selection is not None:
+        try:
+            launch_tui(
+                startup_directory=Path.cwd(),
+                selection=tui_selection,
+                session_id=session_id,
+                model=model,
+                workflow_options={
+                    "max_loops": max_loops,
+                    "max_attempts": max_attempts,
+                    "allow_shell": allow_shell,
+                    "env_file": env_file,
+                    "approval_mode": approval_mode,
+                    "checkpoint_mode": checkpoint_mode,
+                    "trace_mode": trace_mode,
+                },
+            )
+        except ValueError as exc:
+            console.print(Text(str(exc), style="red"))
+            raise typer.Exit(2) from None
+        except Exception as exc:
+            console.print(
+                Text(f"TUI failed to start ({type(exc).__name__})", style="red")
+            )
+            raise typer.Exit(1) from None
+        return
 
     if allow_shell:
         console.print(

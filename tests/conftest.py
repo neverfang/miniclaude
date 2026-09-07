@@ -33,6 +33,12 @@ def pytest_addoption(parser):
         default=False,
         help="run paid DeepSeek Stage 5 acceptance with controlled generated execution",
     )
+    parser.addoption(
+        "--run-live-stage6",
+        action="store_true",
+        default=False,
+        help="run paid DeepSeek Stage 6 Session routing acceptance",
+    )
 
 
 def pytest_configure(config):

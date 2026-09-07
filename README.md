@@ -6,18 +6,19 @@
 
 ## 当前进度
 
-仓库初始化完成，第一阶段尚未开始。目前只有项目规划，暂无可运行程序。
+六个学习阶段均已实现。当前版本为 v0.6.0，支持一次性任务、checkpoint 恢复，以及
+带持久 Session、意图路由和右侧状态栏的 Textual TUI。
 
 ## 学习路线
 
 | 阶段 | 核心内容 | 状态 |
 | --- | --- | --- |
-| 1. ReAct | 文件读写、编辑、搜索、命令执行与基础工具调用循环 | 待开始 |
-| 2. LangGraph | Plan → Execute → Verify，失败重试与验收 | 待开始 |
-| 3. MultiAgent | Planner 调度搜索与编码专家，记录任务交接 | 待开始 |
-| 4. Context Engineering | 上下文监控与压缩、持久笔记、分层记忆 | 待开始 |
-| 5. Harness Engineering | 风险操作审批、检查点与恢复、执行追踪 | 待开始 |
-| 6. 终端交互 | Textual TUI、多轮会话与意图路由 | 待开始 |
+| 1. ReAct | 文件读写、编辑、搜索、命令执行与基础工具调用循环 | 已完成 |
+| 2. LangGraph | Plan → Execute → Verify，失败重试与验收 | 已完成 |
+| 3. MultiAgent | Planner 调度搜索与编码专家，记录任务交接 | 已完成 |
+| 4. Context Engineering | 上下文监控与压缩、持久笔记、分层记忆 | 已完成 |
+| 5. Harness Engineering | 风险操作审批、检查点与恢复、执行追踪 | 已完成 |
+| 6. 终端交互 | Textual TUI、多轮会话与意图路由 | 已完成 |
 
 计划每完成一个阶段，在测试验收后发布对应版本，从 `v0.1.0` 逐步演进到 `v0.6.0`。
 
@@ -30,7 +31,14 @@
 - Tavily：搜索能力。
 - Textual：最终阶段的终端交互界面。
 
-依赖将随学习阶段逐步引入，安装和运行说明会在实现后补充。
+## 快速启动
+
+    uv sync
+    uv run miniclaude
+
+普通 miniclaude 每次创建新 Session；miniclaude -c 恢复最近 Session。一次性任务
+仍可使用 miniclaude "任务"。阶段六的完整目录、快捷键和安全说明见
+[阶段六文档](docs/stage6.md)。
 
 ## 项目文档
 
