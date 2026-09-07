@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from miniclaude.core.cancellation import CancellationToken
+
 
 class ToolError(ValueError):
     """An actionable tool error that may safely be returned to the model."""
@@ -25,6 +27,8 @@ class RuntimeState:
     trace_mode: Literal["on", "off"] = "on"
     trace_id: str | None = None
     event_handler: Callable[[dict[str, object]], None] | None = None
+    run_id: str = ""
+    cancellation: CancellationToken = field(default_factory=CancellationToken)
 
     def __post_init__(self):
         self.workspace = Path(self.workspace).resolve()
