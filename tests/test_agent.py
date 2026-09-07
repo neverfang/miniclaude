@@ -4,6 +4,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from miniclaude.core.agent import stream_agent_events
+from miniclaude.core.state import RuntimeState
 
 
 class ScriptedModel:
@@ -26,6 +27,22 @@ class ScriptedModel:
 
 def call(name, args, call_id="call-1"):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id}])
+
+
+def test_cancelled_runtime_never_invokes_model(tmp_path):
+    runtime = RuntimeState(tmp_path)
+    runtime.cancellation.cancel("test cancellation")
+    model = ScriptedModel([])
+
+    events = list(
+        stream_agent_events("build", workspace=tmp_path, runtime=runtime, model=model)
+    )
+
+    assert events[-1] == {
+        "type": "cancelled",
+        "reason": "test cancellation",
+    }
+    assert model.inputs == []
 
 
 def test_end_to_end_model_creates_and_runs_real_code(tmp_path):

@@ -3,6 +3,7 @@
 from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
 
+from miniclaude.core.cancellation import TurnCancelled
 from miniclaude.core.state import RuntimeState, ToolError
 from miniclaude.tools.bash_tool import run_bash
 from miniclaude.tools.file_tools import edit_file, read_file, write_file
@@ -15,6 +16,7 @@ def _read_tool(state: RuntimeState) -> StructuredTool:
 
         Read before modifying an existing file. Max limit 2000 lines; outputs may be truncated.
         """
+        state.cancellation.checkpoint()
         return read_file(state, file_path, offset, limit)
 
     return StructuredTool.from_function(read, name="FileReadTool")
@@ -32,6 +34,7 @@ def _grep_tool(state: RuntimeState) -> StructuredTool:
 
         Search path is workspace-relative. Secrets, environment and Git folders are skipped.
         """
+        state.cancellation.checkpoint()
         return grep(state, pattern, path, glob, head_limit, ignore_case)
 
     return StructuredTool.from_function(search, name="GrepTool")
@@ -50,6 +53,7 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
 
         Use workspace-relative paths. Existing files changed since reading will be rejected.
         """
+        state.cancellation.checkpoint()
         return write_file(state, file_path, content)
 
     def edit(file_path: str, old_text: str, new_text: str) -> dict:
@@ -57,6 +61,7 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
 
         Preserve surrounding content. Read again after every modification; include unique context.
         """
+        state.cancellation.checkpoint()
         return edit_file(state, file_path, old_text, new_text)
 
     def bash(command: str, timeout_seconds: float | None = None) -> dict:
@@ -65,6 +70,7 @@ def build_tools(state: RuntimeState) -> list[StructuredTool]:
         Requires the user's --allow-shell opt-in. Use for tests and demos, not file editing.
         No background tasks. The working directory is NOT a sandbox. Max timeout 600 seconds.
         """
+        state.cancellation.checkpoint()
         return run_bash(state, command, timeout_seconds)
 
     return [
@@ -82,6 +88,8 @@ def execute_tool(tools: list[StructuredTool], name: str, args: dict) -> dict:
         return {"ok": False, "error": f"Unknown tool: {name}"}
     try:
         return tool.invoke(args)
+    except TurnCancelled as exc:
+        return {"ok": False, "cancelled": True, "error": str(exc)}
     except ValidationError as exc:
         # Do not echo raw invalid input (it may contain sensitive or huge data).
         fields = ", ".join(".".join(map(str, e["loc"])) for e in exc.errors())

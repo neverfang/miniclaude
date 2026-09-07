@@ -19,6 +19,12 @@ class ChatModel(Protocol):
     def bind_tools(self, tools): ...
 
 
+def _cancel_event(state: RuntimeState) -> dict[str, object] | None:
+    if not state.cancellation.cancelled:
+        return None
+    return {"type": "cancelled", "reason": state.cancellation.reason}
+
+
 def _text(content) -> str:
     if isinstance(content, str):
         return content
@@ -70,6 +76,10 @@ def stream_agent_events(
         "workspace": str(state.workspace),
         "allow_shell": state.allow_shell,
     }
+    cancelled = _cancel_event(state)
+    if cancelled is not None:
+        yield cancelled
+        return
     try:
         agent = model.bind_tools(active_tools)
     except Exception as exc:
@@ -81,6 +91,10 @@ def stream_agent_events(
         return
     seen_call_ids = set()
     for iteration in range(1, max_loops + 1):
+        cancelled = _cancel_event(state)
+        if cancelled is not None:
+            yield cancelled
+            return
         yield {"type": "model_start", "iteration": iteration}
         try:
             response = agent.invoke(messages)
@@ -94,6 +108,10 @@ def stream_agent_events(
                     "check endpoint, model and credentials"
                 ),
             }
+            return
+        cancelled = _cancel_event(state)
+        if cancelled is not None:
+            yield cancelled
             return
         if not isinstance(response, AIMessage) or response.invalid_tool_calls:
             yield {
@@ -134,6 +152,10 @@ def stream_agent_events(
             yield {"type": "final_answer", "content": content, "status": "completed"}
             return
         for call in calls:
+            cancelled = _cancel_event(state)
+            if cancelled is not None:
+                yield cancelled
+                return
             yield {
                 "type": "tool_call",
                 "name": call["name"],
@@ -150,6 +172,12 @@ def stream_agent_events(
             if captured_messages is not None:
                 captured_messages.append(tool_message)
             yield {"type": "tool_result", "name": call["name"], "id": call["id"], "result": result}
+            if result.get("cancelled"):
+                yield {
+                    "type": "cancelled",
+                    "reason": str(result.get("error", state.cancellation.reason)),
+                }
+                return
     yield {
         "type": "error",
         "code": "max_loops",

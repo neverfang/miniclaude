@@ -201,6 +201,21 @@ def test_registry_has_five_typed_tools_and_structured_failures(state):
     assert execute_tool(tools, "FileWriteTool", {"file_path": "ok", "content": "yes"})["ok"]
 
 
+def test_cancelled_runtime_does_not_dispatch_file_tool(tmp_path):
+    runtime = RuntimeState(tmp_path)
+    runtime.cancellation.cancel("stop")
+    tools = build_tools(runtime)
+
+    result = execute_tool(
+        tools,
+        "FileWriteTool",
+        {"file_path": "blocked.txt", "content": "must not exist"},
+    )
+
+    assert result == {"ok": False, "cancelled": True, "error": "stop"}
+    assert not (tmp_path / "blocked.txt").exists()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell-specific exit status")
 def test_shell_native_success_then_cmdlet_failure_is_failure(state):
     state.allow_shell = True
