@@ -47,6 +47,15 @@ def test_no_task_launches_a_new_tui_session(monkeypatch):
     assert calls[0]["selection"] == "new"
 
 
+def test_explicit_blank_task_is_rejected_instead_of_opening_tui(monkeypatch):
+    calls = install_fake_tui(monkeypatch)
+
+    result = runner.invoke(app, ["   "])
+
+    assert result.exit_code == 2
+    assert calls == []
+
+
 @pytest.mark.parametrize("flag", ["-c", "--continue"])
 def test_continue_launches_latest_session(monkeypatch, flag):
     calls = install_fake_tui(monkeypatch)

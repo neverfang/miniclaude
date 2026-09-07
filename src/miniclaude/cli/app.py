@@ -121,6 +121,9 @@ def main(
     if restore_workspace and resume is None:
         console.print(Text("--restore-workspace requires --resume", style="red"))
         raise typer.Exit(2)
+    if task is not None and not task_value.strip():
+        console.print(Text("Task must not be blank", style="red"))
+        raise typer.Exit(2)
     session_modes = int(continue_session) + int(session_id is not None)
     if session_modes > 1:
         console.print(Text("--continue and --session are mutually exclusive", style="red"))
@@ -148,7 +151,7 @@ def main(
             raise typer.Exit(2)
 
     tui_selection = None
-    if resume is None and not task_value.strip():
+    if resume is None and task is None:
         tui_selection = (
             "latest"
             if continue_session

@@ -223,6 +223,11 @@ def append_assistant_turn(
         raise SessionError("Assistant turn does not match the current user turn")
     if route not in _ROUTES:
         raise SessionError("Assistant route must be chat or workflow")
+    if any(
+        item.get("role") == "assistant" and item.get("turn") == turn
+        for item in session["recent_turns"]
+    ):
+        raise SessionError("Assistant turn was already recorded")
     if not isinstance(content, str) or not content.strip():
         raise SessionError("Assistant turn content must not be blank")
     item: dict[str, object] = {
@@ -282,22 +287,71 @@ def _validate_in_memory_session(
     workspace = session["workspace"]
     if not isinstance(workspace, Path) or workspace.resolve() != expected_workspace:
         raise SessionError("Session workspace is invalid")
-    for name in ("created_at", "updated_at", "latest_checkpoint", "latest_trace_id"):
+    created_at = _parse_timestamp(session["created_at"], "created_at")
+    updated_at = _parse_timestamp(session["updated_at"], "updated_at")
+    if updated_at < created_at:
+        raise SessionError("Session updated_at precedes created_at")
+    for name in ("latest_checkpoint", "latest_trace_id"):
         if not isinstance(session[name], str):
             raise SessionError(f"Session {name} is invalid")
-    for item in session["recent_turns"]:
+    if len(session["recent_turns"]) > MAX_RECENT_TURNS:
+        raise SessionError("Session recent turns exceed their bound")
+    previous_turn = 0
+    seen: set[tuple[int, str]] = set()
+    for index, item in enumerate(session["recent_turns"]):
         if not isinstance(item, dict):
             raise SessionError("Session turn entry is invalid")
-        if item.get("role") not in _ROLES:
+        role = item.get("role")
+        if role not in _ROLES:
             raise SessionError("Session turn role is invalid")
+        allowed_fields = {"role", "turn", "content", "created_at"}
+        if role == "assistant":
+            allowed_fields.update({"route", "summary"})
+        if not set(item).issubset(allowed_fields) or not {
+            "role",
+            "turn",
+            "content",
+            "created_at",
+        }.issubset(item):
+            raise SessionError("Session turn fields are invalid")
         if not isinstance(item.get("turn"), int) or int(item["turn"]) < 1:
             raise SessionError("Session turn number is invalid")
+        turn = int(item["turn"])
+        if turn < previous_turn or turn > session["turn_index"]:
+            raise SessionError("Session turn ordering is invalid")
+        identity = (turn, str(role))
+        if identity in seen:
+            raise SessionError("Session contains a duplicate role for one turn")
+        if role == "user" and (turn, "assistant") in seen:
+            raise SessionError("Session user turn follows its assistant turn")
+        if role == "assistant" and (turn, "user") not in seen and index != 0:
+            raise SessionError("Session assistant turn has no preceding user turn")
+        seen.add(identity)
+        previous_turn = turn
         if not isinstance(item.get("content"), str):
             raise SessionError("Session turn content is invalid")
         if len(item["content"]) > MAX_TURN_CONTENT:
             raise SessionError("Session turn content exceeds its bound")
-        if item["role"] == "assistant" and item.get("route") not in _ROUTES:
+        _parse_timestamp(item["created_at"], "turn created_at")
+        if role == "assistant" and item.get("route") not in _ROUTES:
             raise SessionError("Session assistant route is invalid")
+        summary = item.get("summary")
+        if summary is not None and (
+            not isinstance(summary, str) or len(summary) > MAX_TURN_CONTENT
+        ):
+            raise SessionError("Session assistant summary is invalid")
+
+
+def _parse_timestamp(value: object, name: str) -> datetime:
+    if not isinstance(value, str):
+        raise SessionError(f"Session {name} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise SessionError(f"Session {name} is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise SessionError(f"Session {name} must include a timezone")
+    return parsed
 
 
 def load_session(startup_directory: Path, session_id: str) -> SessionData:

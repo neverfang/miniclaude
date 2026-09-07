@@ -89,3 +89,44 @@ def test_failed_turn_is_persisted_without_provider_secret(tmp_path):
         "user",
         "assistant",
     ]
+
+
+def test_final_save_failure_does_not_append_a_second_assistant(
+    tmp_path,
+    monkeypatch,
+):
+    import miniclaude.core.session_controller as controller
+
+    session = create_session(tmp_path)
+    real_save = controller.save_session
+    calls = 0
+
+    def fail_second_save(startup_directory, current):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("disk full")
+        return real_save(startup_directory, current)
+
+    monkeypatch.setattr(controller, "save_session", fail_second_save)
+
+    events = list(
+        stream_session_turn(
+            "hello",
+            session=session,
+            startup_directory=tmp_path,
+            router=lambda *args, **kwargs: {
+                "route": "chat",
+                "reason": "greeting",
+                "confidence": 1.0,
+            },
+            chat=lambda *args, **kwargs: "answer",
+            workflow_stream=lambda *args, **kwargs: iter(()),
+        )
+    )
+
+    assert events[-1]["type"] == "session_error"
+    assert [item["role"] for item in session["recent_turns"]] == [
+        "user",
+        "assistant",
+    ]

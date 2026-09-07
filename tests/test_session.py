@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from miniclaude.core.session import (
@@ -144,3 +146,55 @@ def test_context_is_bounded_and_prefers_newer_turns(tmp_path):
 
     assert len(context) <= MAX_SESSION_CONTEXT
     assert "answer-19" in context
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda data: data.update(created_at="not-a-timestamp"),
+        lambda data: data.update(recent_turns=data["recent_turns"] * 11),
+        lambda data: data["recent_turns"][1].update(turn=0),
+    ],
+)
+def test_load_rejects_invalid_timestamp_bounds_and_turn_order(tmp_path, mutation):
+    session = create_session(tmp_path)
+    turn = append_user_turn(session, "hello")
+    append_assistant_turn(
+        session,
+        turn=turn,
+        route="chat",
+        content="answer",
+    )
+    save_session(tmp_path, session)
+    path = (
+        tmp_path
+        / ".miniclaude"
+        / "sessions"
+        / session["session_id"]
+        / "session.json"
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    mutation(data)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(SessionError):
+        load_session(tmp_path, session["session_id"])
+
+
+def test_duplicate_assistant_turn_is_rejected(tmp_path):
+    session = create_session(tmp_path)
+    turn = append_user_turn(session, "hello")
+    append_assistant_turn(
+        session,
+        turn=turn,
+        route="chat",
+        content="answer",
+    )
+
+    with pytest.raises(SessionError, match="already"):
+        append_assistant_turn(
+            session,
+            turn=turn,
+            route="chat",
+            content="duplicate",
+        )
