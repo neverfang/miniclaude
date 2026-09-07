@@ -1,0 +1,127 @@
+Screen {
+    background: #0b0f14;
+    color: #d9e2ec;
+}
+
+Header {
+    background: #111821;
+    color: #e6edf3;
+}
+
+#body {
+    height: 1fr;
+    layout: grid;
+    grid-size: 2 1;
+    grid-columns: 1fr 32;
+}
+
+#execution-column {
+    height: 1fr;
+    padding: 1;
+}
+
+#plan {
+    height: 7;
+    min-height: 3;
+    padding: 1 2;
+    border: round #56708d;
+    background: #111821;
+}
+
+#plan.collapsed {
+    display: none;
+}
+
+#event-stream {
+    height: 2fr;
+    margin-top: 1;
+    padding: 0 1;
+    border: round #2b3b4e;
+    background: #0e141b;
+}
+
+.event-card {
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 1 2;
+    border-left: thick #6c7f93;
+    background: #151d27;
+}
+
+.tool-call-card {
+    border-left: thick #c678dd;
+}
+
+.tool-result-card {
+    border-left: thick #56b6c2;
+}
+
+.handoff-card {
+    border-left: thick #e5c07b;
+}
+
+.checkpoint-card, .trace-card {
+    border-left: thick #61afef;
+}
+
+.failure-card {
+    border-left: thick #e06c75;
+}
+
+#conversation {
+    height: 1fr;
+    min-height: 5;
+    margin-top: 1;
+    padding: 1 2;
+    border: round #2f8f83;
+    background: #0f1718;
+    overflow-y: auto;
+}
+
+#session-sidebar {
+    width: 32;
+    height: 1fr;
+    padding: 2 1;
+    border-left: solid #34485e;
+    background: #10161e;
+    color: #c7d5e3;
+}
+
+#prompt-row {
+    height: 3;
+    padding: 0 1;
+    background: #111821;
+}
+
+#prompt {
+    width: 1fr;
+    border: tall #2f8f83;
+}
+
+#send {
+    width: 10;
+    margin-left: 1;
+}
+
+Screen.narrow #body {
+    grid-size: 1 2;
+    grid-columns: 1fr;
+    grid-rows: 1fr 3;
+}
+
+Screen.narrow #session-sidebar {
+    width: 1fr;
+    height: 3;
+    padding: 0 1;
+    border-left: none;
+    border-top: solid #34485e;
+    overflow: hidden;
+}
+
+Screen.narrow #plan {
+    display: none;
+}
+
+Footer {
+    background: #111821;
+}
