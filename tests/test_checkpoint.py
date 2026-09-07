@@ -10,6 +10,7 @@ from miniclaude.core.checkpoint import (
     serialize_resume_state,
     workspace_manifest,
 )
+from miniclaude.core.sanitize import MAX_PERSISTED_ITEMS
 from miniclaude.core.state import RuntimeState
 from miniclaude.graph.state import initial_graph_state
 
@@ -119,6 +120,21 @@ def test_resume_state_serializes_supported_messages_and_independent_collections(
     ]
     serialized["todos"][0]["content"] = "changed"
     assert state["todos"][0]["content"] == "Write code"
+
+
+def test_resume_state_caps_messages_without_truncation_marker(tmp_path):
+    runtime = RuntimeState(tmp_path)
+    state = _state(runtime)
+    state["messages"] = [
+        HumanMessage(content=f"message-{index}")
+        for index in range(MAX_PERSISTED_ITEMS + 1)
+    ]
+
+    serialized = serialize_resume_state(state)
+
+    assert len(serialized["messages"]) == MAX_PERSISTED_ITEMS
+    assert all(isinstance(record, dict) for record in serialized["messages"])
+    assert serialized["messages"][-1]["content"] == "message-99"
 
 
 def test_manifest_is_bounded_and_excludes_protected_content(tmp_path):

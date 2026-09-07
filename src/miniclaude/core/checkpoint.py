@@ -12,7 +12,7 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from miniclaude.core.paths import protected_part
-from miniclaude.core.sanitize import sanitize_for_persistence
+from miniclaude.core.sanitize import MAX_PERSISTED_ITEMS, sanitize_for_persistence
 from miniclaude.core.snapshot import WorkspaceSnapshotStore
 from miniclaude.core.state import RuntimeState
 
@@ -116,11 +116,12 @@ def serialize_resume_state(state: Mapping[str, object]) -> dict[str, object]:
         value = state[field]
         if field == "messages":
             messages = value if isinstance(value, list | tuple) else []
-            serialized[field] = [
+            records = [
                 _serialize_message(message)
                 for message in messages
                 if isinstance(message, BaseMessage)
             ]
+            serialized[field] = records[:MAX_PERSISTED_ITEMS]
         else:
             serialized[field] = sanitize_for_persistence(value)
     clean = sanitize_for_persistence(serialized)
