@@ -52,6 +52,19 @@ def test_registry_denies_every_pending_gate_on_shutdown():
     assert second.wait(0).approved is False
 
 
+def test_approval_is_scoped_to_one_request_only():
+    registry = ApprovalGateRegistry()
+    first = registry.create(request("one"))
+    second = registry.create(request("two"))
+
+    first.resolve(True, "Approved once")
+
+    assert first.wait(0).approved is True
+    assert second.resolved is False
+    second.resolve(False, "Denied separately")
+    assert second.wait(0).approved is False
+
+
 class ModalTestApp(App):
     def __init__(self, gate):
         super().__init__()

@@ -505,3 +505,21 @@ def test_all_mode_cannot_approve_blocked_command(tmp_path, monkeypatch):
     assert result["requires_approval"] is False
     assert calls == []
     assert started == []
+
+
+def test_disabled_shell_emits_capability_blocked_event(tmp_path):
+    events = []
+    runtime = RuntimeState(tmp_path, allow_shell=False, event_handler=events.append)
+
+    with pytest.raises(ToolError, match="--allow-shell"):
+        run_bash(runtime, "python --version")
+
+    assert events == [
+        {
+            "type": "capability_blocked",
+            "capability": "shell",
+            "tool": "BashTool",
+            "message": "Shell is disabled.",
+            "restart": "uv run miniclaude -c --allow-shell --approval-mode all",
+        }
+    ]

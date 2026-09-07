@@ -119,6 +119,16 @@ def _approval_result(state: RuntimeState, command: str) -> dict[str, object] | N
 
 def run_bash(state: RuntimeState, command: str, timeout_seconds: float | None = None) -> dict:
     if not state.allow_shell:
+        _emit_runtime_event(
+            state,
+            {
+                "type": "capability_blocked",
+                "capability": "shell",
+                "tool": "BashTool",
+                "message": "Shell is disabled.",
+                "restart": "uv run miniclaude -c --allow-shell --approval-mode all",
+            },
+        )
         raise ToolError("Shell is disabled. The user must opt in with --allow-shell")
     timeout = state.command_timeout if timeout_seconds is None else timeout_seconds
     if not math.isfinite(timeout) or not 0 < timeout <= 600:

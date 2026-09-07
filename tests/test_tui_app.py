@@ -208,3 +208,63 @@ def test_ctrl_s_collapses_plan_and_ctrl_l_clears_visuals(tmp_path):
             assert session["turn_index"] == 0
 
     asyncio.run(scenario())
+
+
+def test_slash_help_is_local_and_does_not_increment_session(tmp_path):
+    def should_not_run(task, **kwargs):
+        raise AssertionError("slash commands must not reach the model turn stream")
+
+    async def scenario():
+        session = create_session(tmp_path)
+        app = MiniclaudeTuiApp(
+            session=session,
+            startup_directory=tmp_path,
+            turn_stream=should_not_run,
+        )
+        async with app.run_test() as pilot:
+            await submit(pilot, "/help")
+            await pilot.pause()
+            assert session["turn_index"] == 0
+            rendered = "\n".join(card.render().plain for card in app.query(".command-card"))
+            assert "/status" in rendered
+
+    asyncio.run(scenario())
+
+
+def test_slash_new_changes_session_without_model_turn(tmp_path):
+    def should_not_run(task, **kwargs):
+        raise AssertionError("slash commands must not reach the model turn stream")
+
+    async def scenario():
+        session = create_session(tmp_path)
+        original_id = session["session_id"]
+        app = MiniclaudeTuiApp(
+            session=session,
+            startup_directory=tmp_path,
+            turn_stream=should_not_run,
+        )
+        async with app.run_test() as pilot:
+            await submit(pilot, "/new")
+            await pilot.pause()
+            assert app.session["session_id"] != original_id
+            assert app.session["turn_index"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_slash_prefix_shows_bounded_suggestions(tmp_path):
+    async def scenario():
+        app = MiniclaudeTuiApp(
+            session=create_session(tmp_path),
+            startup_directory=tmp_path,
+            turn_stream=fake_turn_stream,
+        )
+        async with app.run_test() as pilot:
+            prompt = app.query_one("#prompt", Input)
+            prompt.value = "/st"
+            await pilot.pause()
+            suggestions = app.query_one("#command-suggestions")
+            assert suggestions.display is True
+            assert "/status" in suggestions.render().plain
+
+    asyncio.run(scenario())

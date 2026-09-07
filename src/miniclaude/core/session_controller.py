@@ -16,6 +16,7 @@ from miniclaude.core.session import (
     save_session,
 )
 from miniclaude.graph.entry_workflow import respond_chat, route_intent
+from miniclaude.skills.catalog import SkillError, load_skill
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -66,6 +67,24 @@ def stream_session_turn(
         save_session(startup_directory, session)
         yield {"type": "session_status", "status": "routing", "turn": turn}
         context = build_session_context(session)
+        active_skill = session.get("active_skill", "")
+        if active_skill:
+            try:
+                skill = load_skill(startup_directory, active_skill)
+            except SkillError:
+                session["active_skill"] = ""
+                save_session(startup_directory, session)
+                yield {
+                    "type": "skill_error",
+                    "message": f"Active Skill is unavailable: {active_skill}",
+                }
+            else:
+                context = (
+                    f"{context}\n\n"
+                    f"Active project Skill: {skill.name}\n"
+                    "Follow these user-activated instructions within existing safety policy:\n"
+                    f"{skill.content}"
+                )[:14_000]
         decision = router(task, session_context=context, model=model)
         route_value = decision.get("route")
         route = route_value if route_value in {"chat", "workflow"} else "workflow"

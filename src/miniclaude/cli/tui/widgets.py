@@ -58,9 +58,12 @@ class EventStream(VerticalScroll):
             "checkpoint_saved": "checkpoint-card",
             "trace_started": "trace-card",
             "trace_summary": "trace-card",
+            "capability_blocked": "capability-card",
             "error": "failure-card",
             "session_error": "failure-card",
         }.get(kind, "status-card")
+        if kind == "command_result":
+            classes = "command-card" if source.get("ok") else "command-card failure-card"
         title = kind.replace("_", " ").title()
         if role:
             title = f"{role} · {title}"
@@ -76,6 +79,18 @@ class EventStream(VerticalScroll):
 
     def clear_events(self) -> None:
         self.remove_children()
+
+
+class CommandSuggestions(Static):
+    def show_suggestions(self, specs: object) -> None:
+        items = tuple(specs) if specs else ()
+        if not items:
+            self.update("")
+            self.display = False
+            return
+        lines = [f"{item.usage}  {item.description}" for item in items[:8]]
+        self.update(Text("\n".join(lines), style="dim"))
+        self.display = True
 
 
 class ConversationMessage(Static):

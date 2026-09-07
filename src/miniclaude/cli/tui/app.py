@@ -23,19 +23,23 @@ from miniclaude.cli.tui.state import (
     reduce_session_event,
 )
 from miniclaude.cli.tui.widgets import (
+    CommandSuggestions,
     ConversationPanel,
     EventStream,
     PlanPanel,
     SessionSidebar,
 )
+from miniclaude.commands.registry import CommandContext, build_command_registry
 from miniclaude.core.approval import ApprovalDecision, ApprovalRequest
 from miniclaude.core.session import (
     SessionData,
     create_session,
     load_latest_session,
     load_session,
+    save_session,
 )
 from miniclaude.core.session_controller import stream_session_turn
+from miniclaude.skills.catalog import discover_skills
 
 
 class AgentEventMessage(Message):
@@ -82,6 +86,7 @@ class MiniclaudeTuiApp(App):
         self.turn_stream = turn_stream
         self.workflow_options = dict(workflow_options or {})
         self.gate_registry = ApprovalGateRegistry()
+        self.command_registry = build_command_registry()
         self.view_state: SessionViewState = initial_session_view(
             session["session_id"],
             session["workspace"],
@@ -98,6 +103,7 @@ class MiniclaudeTuiApp(App):
                 yield EventStream(id="event-stream")
                 yield ConversationPanel(id="conversation")
             yield SessionSidebar(id="session-sidebar")
+        yield CommandSuggestions(id="command-suggestions")
         with Horizontal(id="prompt-row"):
             yield Input(
                 placeholder="Chat or ask for coding work, then press Enter",
@@ -126,6 +132,13 @@ class MiniclaudeTuiApp(App):
         if event.input.id == "prompt":
             self.submit_prompt()
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "prompt":
+            return
+        self.query_one(CommandSuggestions).show_suggestions(
+            self.command_registry.suggest(event.value)
+        )
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "send":
             self.submit_prompt()
@@ -135,11 +148,61 @@ class MiniclaudeTuiApp(App):
         task = prompt.value.strip()
         if not task or self._turn_active:
             return
+        if task.startswith(("/", "／")):
+            prompt.value = ""
+            self._run_command(task)
+            return
         self._turn_active = True
         prompt.value = ""
         prompt.disabled = True
         self.query_one(ConversationPanel).append_user(task)
         self._active_worker = self._run_turn(task)
+
+    def _command_context(self) -> CommandContext:
+        skills = discover_skills(self.startup_directory)
+        return CommandContext(
+            session_id=self.session["session_id"],
+            workspace=self.session["workspace"],
+            status=self.view_state.status,
+            route=self.view_state.route,
+            turn_active=self._turn_active,
+            allow_shell=bool(self.workflow_options.get("allow_shell", False)),
+            approval_mode=str(self.workflow_options.get("approval_mode", "inline")),
+            tool_names=(
+                "FileReadTool",
+                "FileWriteTool",
+                "FileEditTool",
+                "GrepTool",
+                "BashTool",
+            ),
+            skill_names=tuple(skill.name for skill in skills),
+            active_skill=self.session.get("active_skill", ""),
+        )
+
+    def _run_command(self, raw: str) -> None:
+        result = self.command_registry.execute(raw, self._command_context())
+        if result.ok:
+            if result.action == "new":
+                self.action_new_session()
+            elif result.action == "clear":
+                self.action_clear_visuals()
+            elif result.action == "plan":
+                self.action_toggle_plan()
+            elif result.action and result.action.startswith("skill:"):
+                selected = result.action.partition(":")[2]
+                self.session["active_skill"] = "" if selected == "off" else selected
+                save_session(self.startup_directory, self.session)
+            elif result.action == "exit":
+                self.exit()
+                return
+        self.query_one(EventStream).append_event(
+            {
+                "type": "command_result",
+                "command": raw,
+                "ok": result.ok,
+                "message": result.message,
+            }
+        )
 
     def _approval_handler(self, request: ApprovalRequest) -> ApprovalDecision:
         gate = self.gate_registry.create(request)

@@ -109,6 +109,24 @@ Header {
     background: #111821;
 }
 
+#command-suggestions {
+    display: none;
+    height: auto;
+    max-height: 10;
+    margin: 0 1;
+    padding: 0 2;
+    border: round #56708d;
+    background: #111821;
+}
+
+.command-card {
+    border-left: thick #98c379;
+}
+
+.capability-card {
+    border-left: thick #e5c07b;
+}
+
 #prompt {
     width: 1fr;
     border: tall #2f8f83;

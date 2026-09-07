@@ -13,7 +13,8 @@ from uuid import uuid4
 from miniclaude.core.paths import protected_part
 from miniclaude.core.sanitize import sanitize_for_persistence
 
-SESSION_FORMAT_VERSION = 1
+SESSION_FORMAT_VERSION = 2
+SESSION_INDEX_FORMAT_VERSION = 1
 MAX_RECENT_TURNS = 20
 MAX_TURN_CONTENT = 4_000
 MAX_SESSION_CONTEXT = 7_000
@@ -37,6 +38,7 @@ class SessionData(TypedDict):
     workspace: Path
     latest_checkpoint: str
     latest_trace_id: str
+    active_skill: str
 
 
 def _now() -> str:
@@ -91,6 +93,7 @@ def _serialize(session: SessionData) -> dict[str, object]:
         "workspace": "workspace",
         "latest_checkpoint": session["latest_checkpoint"],
         "latest_trace_id": session["latest_trace_id"],
+        "active_skill": session["active_skill"],
     }
 
 
@@ -123,7 +126,7 @@ def _load_index(root: Path) -> list[dict[str, str]]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SessionError(f"Session index is unreadable ({type(exc).__name__})") from exc
-    if not isinstance(raw, dict) or raw.get("format_version") != SESSION_FORMAT_VERSION:
+    if not isinstance(raw, dict) or raw.get("format_version") != SESSION_INDEX_FORMAT_VERSION:
         raise SessionError("Unsupported Session index version")
     entries = raw.get("sessions")
     if not isinstance(entries, list):
@@ -158,7 +161,7 @@ def _save_index(root: Path, session: SessionData) -> None:
     )
     entries.sort(key=lambda item: item["updated_at"], reverse=True)
     payload = {
-        "format_version": SESSION_FORMAT_VERSION,
+        "format_version": SESSION_INDEX_FORMAT_VERSION,
         "sessions": entries,
     }
     _atomic_write(
@@ -188,6 +191,7 @@ def create_session(startup_directory: Path) -> SessionData:
             workspace=workspace.resolve(),
             latest_checkpoint="",
             latest_trace_id="",
+            active_skill="",
         )
         save_session(startup_directory, session)
         return session
@@ -271,6 +275,7 @@ def _validate_in_memory_session(
         "workspace",
         "latest_checkpoint",
         "latest_trace_id",
+        "active_skill",
     }
     if set(session) != required:
         raise SessionError("Session fields are invalid")
@@ -294,6 +299,8 @@ def _validate_in_memory_session(
     for name in ("latest_checkpoint", "latest_trace_id"):
         if not isinstance(session[name], str):
             raise SessionError(f"Session {name} is invalid")
+    if not isinstance(session["active_skill"], str) or len(session["active_skill"]) > 64:
+        raise SessionError("Session active Skill is invalid")
     if len(session["recent_turns"]) > MAX_RECENT_TURNS:
         raise SessionError("Session recent turns exceed their bound")
     previous_turn = 0
@@ -365,7 +372,10 @@ def load_session(startup_directory: Path, session_id: str) -> SessionData:
         raise SessionError(f"Session data is unreadable ({type(exc).__name__})") from exc
     if not isinstance(raw, dict):
         raise SessionError("Session data must be an object")
-    if raw.get("format_version") != SESSION_FORMAT_VERSION:
+    if raw.get("format_version") == 1:
+        raw["format_version"] = SESSION_FORMAT_VERSION
+        raw["active_skill"] = ""
+    elif raw.get("format_version") != SESSION_FORMAT_VERSION:
         raise SessionError("Unsupported Session version")
     if raw.get("workspace") != "workspace":
         raise SessionError("Session workspace record is invalid")
