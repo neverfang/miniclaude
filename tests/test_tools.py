@@ -432,3 +432,76 @@ def test_safe_command_bypasses_approval_handler(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert calls == []
     assert len(started) == 1
+
+
+@pytest.mark.parametrize(
+    "decision,expected_ok,expected_started",
+    [
+        (ApprovalDecision(True, "yes"), True, 1),
+        (ApprovalDecision(False, "no"), False, 0),
+    ],
+)
+def test_all_mode_requires_decision_for_safe_command(
+    tmp_path, monkeypatch, decision, expected_ok, expected_started
+):
+    events = []
+    requests = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="all",
+        approval_handler=lambda request: requests.append(request) or decision,
+        event_handler=events.append,
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "python --version")
+
+    assert result["ok"] is expected_ok
+    assert result["risk_level"] == "safe"
+    assert result["requires_approval"] is True
+    assert result["approved"] is decision.approved
+    assert len(requests) == 1
+    assert len(started) == expected_started
+    assert [event["type"] for event in events] == [
+        "approval_requested",
+        "approval_resolved",
+    ]
+
+
+def test_all_mode_requires_decision_for_risky_command(tmp_path, monkeypatch):
+    calls = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="all",
+        approval_handler=lambda request: calls.append(request) or ApprovalDecision(False, "no"),
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "pip install flask")
+
+    assert result["ok"] is False
+    assert result["risk_level"] == "risky"
+    assert result["requires_approval"] is True
+    assert len(calls) == 1
+    assert started == []
+
+
+def test_all_mode_cannot_approve_blocked_command(tmp_path, monkeypatch):
+    calls = []
+    runtime = RuntimeState(
+        tmp_path,
+        allow_shell=True,
+        approval_mode="all",
+        approval_handler=lambda request: calls.append(request) or ApprovalDecision(True, "yes"),
+    )
+    started = _recording_popen(monkeypatch)
+
+    result = run_bash(runtime, "git reset --hard")
+
+    assert result["ok"] is False
+    assert result["risk_level"] == "blocked"
+    assert result["requires_approval"] is False
+    assert calls == []
+    assert started == []

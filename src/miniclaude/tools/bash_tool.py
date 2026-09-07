@@ -65,12 +65,15 @@ def _emit_runtime_event(state: RuntimeState, event: dict[str, object]) -> None:
 
 def _approval_result(state: RuntimeState, command: str) -> dict[str, object] | None:
     risk = classify_command_risk(command, workspace=state.workspace)
-    if risk.level == "safe":
+    if risk.level == "safe" and state.approval_mode != "all":
         return None
 
     request = make_approval_request(command, risk, state.workspace)
+    requires_approval = risk.level == "risky" or (
+        risk.level == "safe" and state.approval_mode == "all"
+    )
     base: dict[str, object] = {
-        "requires_approval": risk.level == "risky",
+        "requires_approval": requires_approval,
         "approval_id": request.id,
         "risk_level": risk.level,
         "risk_reason": risk.reason,
