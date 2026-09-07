@@ -544,6 +544,9 @@ class CheckpointManager:
         messages = stored_state.get("messages", [])
         if not isinstance(messages, list):
             raise ValueError("Invalid checkpoint messages")
+        messages = list(messages)
+        if messages and messages[-1] == "[TRUNCATED_ITEMS]":
+            messages.pop()
         inputs["messages"] = [self._resume_message(record) for record in messages]
 
         restore_event = None

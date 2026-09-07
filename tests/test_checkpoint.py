@@ -275,6 +275,29 @@ def test_resume_rebuilds_runtime_and_supported_graph_state(tmp_path):
     assert payload["state"]["todos"][0]["content"] == "Write code"
 
 
+def test_resume_accepts_legacy_trailing_message_truncation_marker(tmp_path):
+    manager, runtime = _saved_resume_checkpoint(tmp_path)
+    path = manager.root / "checkpoint.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["state"]["messages"].append("[TRUNCATED_ITEMS]")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    inputs, _ = manager.load_resume_inputs(runtime)
+
+    assert [message.type for message in inputs["messages"]] == ["human", "ai"]
+
+
+def test_resume_rejects_nonfinal_message_truncation_marker(tmp_path):
+    manager, runtime = _saved_resume_checkpoint(tmp_path)
+    path = manager.root / "checkpoint.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["state"]["messages"].insert(0, "[TRUNCATED_ITEMS]")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="message record"):
+        manager.load_resume_inputs(runtime)
+
+
 def test_resume_rejects_invalid_json_and_task_mismatch(tmp_path):
     manager, runtime = _saved_resume_checkpoint(tmp_path)
 
