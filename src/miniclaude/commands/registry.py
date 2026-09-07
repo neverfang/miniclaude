@@ -151,14 +151,21 @@ def build_command_registry() -> CommandRegistry:
             )
         )
 
-    def approvals(context: CommandContext, arguments: str) -> CommandResult:
-        del arguments
-        state = "enabled" if context.allow_shell else "disabled"
+    def approve(context: CommandContext, arguments: str) -> CommandResult:
+        mode = arguments.strip().casefold()
+        if not mode:
+            state = "enabled" if context.allow_shell else "disabled"
+            return _result(
+                f"Shell: {state}\n"
+                f"Approval mode: {context.approval_mode}\n"
+                "Modes: all, inline, auto, deny"
+            )
+        if mode not in {"all", "inline", "auto", "deny"}:
+            return CommandResult(False, "Usage: /approve <all, inline, auto, deny>")
+        shell = "disabled" if mode == "deny" else "enabled"
         return _result(
-            f"Shell is {state}; approval mode is {context.approval_mode}.\n"
-            "For one command / one decision, restart with:\n"
-            "uv run miniclaude -c --allow-shell --approval-mode all\n"
-            "Y approves only the displayed command. N, Escape, and Enter deny it."
+            f"Shell is now {shell}; approval mode is {mode}.",
+            f"approval-mode:{mode}",
         )
 
     def skills(context: CommandContext, arguments: str) -> CommandResult:
@@ -214,7 +221,14 @@ def build_command_registry() -> CommandRegistry:
         "Toggle the plan panel.",
         lambda context, arguments: _result("Toggled the plan panel.", "plan"),
     )
-    register("approvals", "Show Shell approval policy.", approvals, aliases=("permissions",))
+    register(
+        "approve",
+        "Show or change Shell approval policy.",
+        approve,
+        usage="/approve [mode]",
+        aliases=("approvals", "permissions"),
+        allowed_while_active=False,
+    )
     register("skills", "List project Skills.", skills)
     register("skill", "Activate a project Skill.", skill, usage="/skill <name|off>")
     register("mcp", "Show MCP server status.", mcp)

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from miniclaude.commands.registry import CommandContext, build_command_registry
 
 
@@ -22,7 +24,7 @@ def test_help_lists_initial_commands_without_using_shell():
     assert result.ok is True
     assert result.action is None
     assert "/status" in result.message
-    assert "/approvals" in result.message
+    assert "/approve [mode]" in result.message
 
 
 def test_full_width_slash_is_normalized_and_arguments_stay_plain_text():
@@ -47,12 +49,43 @@ def test_mutating_command_is_refused_during_active_turn():
     assert "running" in result.message.lower()
 
 
-def test_approvals_explains_one_command_one_decision():
-    result = build_command_registry().execute("/approvals", context())
+@pytest.mark.parametrize("mode", ["all", "inline", "auto", "deny"])
+def test_approve_returns_typed_policy_action(mode):
+    result = build_command_registry().execute(f"/approve {mode}", context())
 
-    assert "--allow-shell" in result.message
-    assert "--approval-mode all" in result.message
-    assert "one" in result.message.lower()
+    assert result.ok is True
+    assert result.action == f"approval-mode:{mode}"
+    assert mode in result.message
+
+
+def test_approve_without_mode_reports_current_policy():
+    result = build_command_registry().execute("/approve", context())
+
+    assert result.ok is True
+    assert result.action is None
+    assert "disabled" in result.message
+    assert "inline" in result.message
+    assert all(mode in result.message for mode in ("all", "auto", "deny"))
+
+
+def test_approvals_is_alias_and_invalid_mode_fails_locally():
+    registry = build_command_registry()
+
+    alias = registry.execute("/approvals all", context())
+    invalid = registry.execute("/approve forever", context())
+
+    assert alias.action == "approval-mode:all"
+    assert invalid.ok is False
+    assert invalid.action is None
+    assert "all, inline, auto, deny" in invalid.message
+
+
+def test_approve_cannot_change_policy_during_active_turn():
+    result = build_command_registry().execute("/approve auto", context(active=True))
+
+    assert result.ok is False
+    assert result.action is None
+    assert "running" in result.message.lower()
 
 
 def test_registry_suggests_matching_commands():
