@@ -118,6 +118,41 @@ def test_duplicate_submit_is_ignored_and_input_reenabled(tmp_path):
     asyncio.run(scenario())
 
 
+def test_two_chat_turns_keep_every_user_and_model_message_visible(tmp_path):
+    answers = iter(["first answer", "second answer"])
+
+    def stream(task, **kwargs):
+        yield {
+            "type": "session_final",
+            "turn": 1 if task == "first question" else 2,
+            "route": "chat",
+            "passed": True,
+            "content": next(answers),
+        }
+
+    async def scenario():
+        session = create_session(tmp_path)
+        app = MiniclaudeTuiApp(
+            session=session,
+            startup_directory=tmp_path,
+            turn_stream=stream,
+        )
+        async with app.run_test() as pilot:
+            await submit(pilot, "first question")
+            await pilot.pause()
+            await submit(pilot, "second question")
+            await pilot.pause()
+            rendered = app.query_one("#conversation").render().plain
+            assert "first question" in rendered
+            assert "first answer" in rendered
+            assert "second question" in rendered
+            assert "second answer" in rendered
+            conversation = app.query_one("#conversation")
+            assert conversation.scroll_y == conversation.max_scroll_y
+
+    asyncio.run(scenario())
+
+
 def test_ctrl_s_collapses_plan_and_ctrl_l_clears_visuals(tmp_path):
     async def scenario():
         session = create_session(tmp_path)

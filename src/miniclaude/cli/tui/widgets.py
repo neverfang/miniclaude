@@ -81,22 +81,23 @@ class EventStream(VerticalScroll):
 class ConversationPanel(Static):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._lines: list[str] = []
+        self._entries: list[str] = []
 
     def _refresh_content(self) -> None:
-        content = "\n\n".join(self._lines) if self._lines else "Conversation"
+        content = "\n\n".join(self._entries) if self._entries else "Conversation"
         self.update(Text(content))
+        self.scroll_end(animate=False, force=True)
 
     def append_user(self, content: str) -> None:
-        self._lines.append(f"You\n{_bounded(content)}")
+        self._entries.append(f"You\n{_bounded(content)}")
         self._refresh_content()
 
     def append_assistant(self, content: str) -> None:
-        self._lines.append(f"Miniclaude\n{_bounded(content)}")
+        self._entries.append(f"Miniclaude\n{_bounded(content)}")
         self._refresh_content()
 
     def clear_conversation(self) -> None:
-        self._lines.clear()
+        self._entries.clear()
         self._refresh_content()
 
 
