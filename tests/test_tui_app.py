@@ -5,7 +5,11 @@ import asyncio
 from textual.widgets import Input
 
 from miniclaude.cli.tui.app import MiniclaudeTuiApp
-from miniclaude.core.session import create_session
+from miniclaude.core.session import (
+    append_assistant_turn,
+    append_user_turn,
+    create_session,
+)
 
 
 def fake_turn_stream(task, **kwargs):
@@ -63,6 +67,30 @@ def test_app_has_execution_column_and_session_sidebar(tmp_path):
             assert app.query_one("#conversation")
             assert app.query_one("#session-sidebar")
             assert app.query_one("#prompt")
+
+    asyncio.run(scenario())
+
+
+def test_continued_session_renders_persisted_conversation(tmp_path):
+    async def scenario():
+        session = create_session(tmp_path)
+        turn = append_user_turn(session, "persisted question")
+        append_assistant_turn(
+            session,
+            turn=turn,
+            route="chat",
+            content="persisted model answer",
+        )
+        app = MiniclaudeTuiApp(
+            session=session,
+            startup_directory=tmp_path,
+            turn_stream=fake_turn_stream,
+        )
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            rendered = app.query_one("#conversation").render().plain
+            assert "persisted question" in rendered
+            assert "persisted model answer" in rendered
 
     asyncio.run(scenario())
 

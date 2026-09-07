@@ -108,7 +108,16 @@ class MiniclaudeTuiApp(App):
 
     def on_mount(self) -> None:
         self.query_one(PlanPanel).update_plan([])
-        self.query_one(ConversationPanel)._refresh_content()
+        conversation = self.query_one(ConversationPanel)
+        if self.session["recent_turns"]:
+            for item in self.session["recent_turns"]:
+                content = str(item.get("content", ""))
+                if item.get("role") == "user":
+                    conversation.append_user(content)
+                elif item.get("role") == "assistant":
+                    conversation.append_assistant(content)
+        else:
+            conversation._refresh_content()
         self.query_one(SessionSidebar).update_state(self.view_state)
         self.query_one("#prompt", Input).focus()
 
