@@ -64,11 +64,19 @@ class EventStream(VerticalScroll):
         }.get(kind, "status-card")
         if kind == "command_result":
             classes = "command-card" if source.get("ok") else "command-card failure-card"
-        title = kind.replace("_", " ").title()
-        if role:
-            title = f"{role} · {title}"
-        payload = {key: value for key, value in source.items() if key != "type"}
-        body = _bounded(payload) if payload else "(no details)"
+            command = _bounded(source.get("command", "/"), 200).replace("\n", " ")
+            title = (
+                f"Command · {command}"
+                if source.get("ok")
+                else f"Command failed · {command}"
+            )
+            body = _bounded(source.get("message", "(no details)"))
+        else:
+            title = kind.replace("_", " ").title()
+            if role:
+                title = f"{role} · {title}"
+            payload = {key: value for key, value in source.items() if key != "type"}
+            body = _bounded(payload) if payload else "(no details)"
         self.mount(
             EventCard(
                 Text(f"{title}\n{body}"),
