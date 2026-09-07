@@ -19,6 +19,8 @@ uv run miniclaude "创建 calculator.py 和 unittest，并执行测试" --allow-
 
 - `inline`（默认）：安全命令直接执行；风险命令在交互式终端显示完整风险面板并询问，
   默认答案为拒绝。非交互终端一律拒绝。
+- `all`：安全命令和风险命令都在交互式终端显示完整审批面板并询问；默认答案为拒绝。
+  blocked 命令仍然直接拒绝，不能人工放行。
 - `auto`：自动批准风险命令，适合用户已经审核过的隔离任务；它不会放行硬阻断命令。
 - `deny`：安全命令可执行，所有风险命令自动拒绝。
 
@@ -64,6 +66,15 @@ blocked 命令不进入子进程，也不能通过 `auto` 放行。审批事件�
 ```powershell
 uv run miniclaude --resume D:\workspace\miniclaude\.miniclaude\workspaces\<workspace-id>
 ```
+
+若要在恢复后审批每一条安全或风险 BashTool 命令，使用：
+
+```powershell
+uv run miniclaude --resume D:\path\to\workspace --allow-shell --approval-mode all
+```
+
+`all` 仍然需要 `--allow-shell`；它显示的是当前终端内的确认面板，而不是图形界面弹窗。
+blocked 命令不会显示确认，也不能人工放行。
 
 恢复时可以省略任务；若提供任务，它必须与 checkpoint 中的任务在空白规范化后相同。
 系统严格校验格式版本、工作区身份、尝试次数、消息类型和所有允许恢复的字段，然后用
