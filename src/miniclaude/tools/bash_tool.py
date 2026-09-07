@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from miniclaude.core.approval import ApprovalDecision, classify_command_risk, make_approval_request
@@ -192,15 +193,30 @@ def run_bash(state: RuntimeState, command: str, timeout_seconds: float | None = 
     for reader in readers:
         reader.start()
     timed_out = False
+    cancelled = False
+    termination_failed = False
+    deadline = time.monotonic() + timeout
     try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _stop_tree(process)
-        process.wait(timeout=5)
+        while process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                _stop_tree(process)
+                break
+            if state.cancellation.wait(min(0.05, remaining)):
+                cancelled = True
+                _stop_tree(process)
+                break
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            termination_failed = True
     except BaseException:
         _stop_tree(process)
-        process.wait(timeout=5)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         raise
     finally:
         for reader in readers:
@@ -208,15 +224,24 @@ def run_bash(state: RuntimeState, command: str, timeout_seconds: float | None = 
     incomplete = any(reader.is_alive() for reader in readers)
     decoded = [data.decode("utf-8", errors="replace") for data in outputs]
     result = {
-        "ok": process.returncode == 0 and not timed_out and not incomplete,
+        "ok": process.returncode == 0 and not timed_out and not cancelled and not incomplete,
         "exit_code": process.returncode,
         "stdout": decoded[0][: state.max_output_chars],
         "stderr": decoded[1][: state.max_output_chars],
         "timed_out": timed_out,
+        "cancelled": cancelled,
         "truncated": any(overflows) or any(len(s) > state.max_output_chars for s in decoded),
     }
     result.update(approval or {})
-    if timed_out:
+    if cancelled:
+        if termination_failed or process.poll() is None:
+            result["termination_failed"] = True
+            result["error"] = (
+                "Cancellation requested; process-tree termination could not be confirmed"
+            )
+        else:
+            result["error"] = state.cancellation.reason
+    elif timed_out:
         result["error"] = "Command timed out; process-tree termination was attempted"
     elif incomplete:
         result["error"] = (

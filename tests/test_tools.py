@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 
 import pytest
@@ -160,6 +161,66 @@ def test_shell_output_limit_and_timeout(state):
     assert result["ok"] is False
     assert result["timed_out"]
     assert time.monotonic() - start < 8
+
+
+def test_shell_cancellation_is_distinct_from_timeout(tmp_path):
+    runtime = RuntimeState(tmp_path, allow_shell=True, approval_mode="auto")
+    result_box = {}
+
+    def invoke():
+        result_box["result"] = run_bash(
+            runtime,
+            'python -c "import time; time.sleep(30)"',
+            timeout_seconds=60,
+        )
+
+    thread = threading.Thread(target=invoke)
+    thread.start()
+    time.sleep(0.2)
+    runtime.cancellation.cancel("Escape pressed")
+    thread.join(timeout=8)
+
+    assert thread.is_alive() is False
+    assert result_box["result"]["ok"] is False
+    assert result_box["result"]["cancelled"] is True
+    assert result_box["result"]["timed_out"] is False
+    assert "Escape pressed" in result_box["result"]["error"]
+
+
+def test_shell_cancellation_reports_unconfirmed_termination(tmp_path, monkeypatch):
+    import io
+    import subprocess
+
+    class UnstoppableProcess:
+        stdout = io.BytesIO()
+        stderr = io.BytesIO()
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired("test", timeout)
+
+        def kill(self):
+            pass
+
+    runtime = RuntimeState(tmp_path, allow_shell=True, approval_mode="auto")
+    runtime.cancellation.cancel("stop")
+    monkeypatch.setattr(
+        "miniclaude.tools.bash_tool.subprocess.Popen",
+        lambda *args, **kwargs: UnstoppableProcess(),
+    )
+    monkeypatch.setattr("miniclaude.tools.bash_tool._stop_tree", lambda process: None)
+
+    result = run_bash(runtime, "python --version")
+
+    assert result["ok"] is False
+    assert result["cancelled"] is True
+    assert result["termination_failed"] is True
+    assert result["error"] == (
+        "Cancellation requested; process-tree termination could not be confirmed"
+    )
 
 
 def test_shell_does_not_inherit_model_secrets(state, monkeypatch):
