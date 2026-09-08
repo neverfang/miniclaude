@@ -175,3 +175,24 @@ def test_cancelled_turn_is_not_saved_as_assistant_and_next_turn_can_start(tmp_pa
         "user",
         "assistant",
     ]
+
+
+def test_precancelled_session_turn_never_calls_router(tmp_path):
+    session = create_session(tmp_path)
+    token = CancellationToken()
+    token.cancel("Escape pressed")
+
+    events = list(
+        stream_session_turn(
+            "cancel before start",
+            session=session,
+            startup_directory=tmp_path,
+            run_id="run-one",
+            cancellation=token,
+            router=lambda *args, **kwargs: pytest.fail("router must not run"),
+        )
+    )
+
+    assert events[-1]["type"] == "session_cancelled"
+    loaded = load_session(tmp_path, session["session_id"])
+    assert loaded["recent_turns"][-1]["status"] == "cancelled"

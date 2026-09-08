@@ -61,3 +61,14 @@ def test_sidebar_reducer_tracks_runtime_policy():
 
     assert state.shell_enabled is True
     assert state.approval_mode == "all"
+
+
+def test_cancellation_moves_through_cancelling_to_idle():
+    state = initial_session_view("abc123def456", Path("workspace"))
+    state = reduce_session_event(state, {"type": "session_status", "status": "running"})
+    state = reduce_session_event(state, {"type": "session_cancelling"})
+    assert state.status == "cancelling"
+
+    state = reduce_session_event(state, {"type": "session_cancelled"})
+    assert state.status == "idle"
+    assert state.approval_pending is False

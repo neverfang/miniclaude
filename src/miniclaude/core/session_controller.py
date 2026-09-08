@@ -85,6 +85,10 @@ def stream_session_turn(
             save_session(startup_directory, session)
         unregister_cancel = token.register(persist_cancellation)
         yield {"type": "session_status", "status": "routing", "turn": turn}
+        if token.cancelled:
+            persist_cancellation()
+            yield cancelled_event()
+            return
         context = build_session_context(session)
         active_skill = session.get("active_skill", "")
         if active_skill:

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from textual import events, work
 from textual.app import App, ComposeResult
@@ -31,6 +33,7 @@ from miniclaude.cli.tui.widgets import (
 )
 from miniclaude.commands.registry import CommandContext, build_command_registry
 from miniclaude.core.approval import ApprovalDecision, ApprovalRequest
+from miniclaude.core.cancellation import CancellationToken
 from miniclaude.core.session import (
     SessionData,
     create_session,
@@ -42,20 +45,31 @@ from miniclaude.core.session_controller import stream_session_turn
 from miniclaude.skills.catalog import discover_skills
 
 
+@dataclass
+class ActiveTurn:
+    run_id: str
+    cancellation: CancellationToken
+    worker: object | None = None
+
+
 class AgentEventMessage(Message):
-    def __init__(self, event: dict):
+    def __init__(self, event: dict, *, run_id: str):
         super().__init__()
         self.event = event
+        self.run_id = run_id
 
 
 class TurnCompletedMessage(Message):
-    pass
+    def __init__(self, *, run_id: str):
+        super().__init__()
+        self.run_id = run_id
 
 
 class ApprovalRequestedMessage(Message):
-    def __init__(self, gate: ApprovalGate):
+    def __init__(self, gate: ApprovalGate, *, run_id: str):
         super().__init__()
         self.gate = gate
+        self.run_id = run_id
 
 
 class MiniclaudeTuiApp(App):
@@ -64,6 +78,7 @@ class MiniclaudeTuiApp(App):
     CSS_PATH = "app.tcss"
     BINDINGS = [
         ("ctrl+c", "cancel_or_quit", "Cancel / quit"),
+        ("escape", "cancel", "Cancel"),
         ("ctrl+l", "clear_visuals", "Clear view"),
         ("ctrl+n", "new_session", "New Session"),
         ("ctrl+o", "show_workspace", "Workspace"),
@@ -94,8 +109,15 @@ class MiniclaudeTuiApp(App):
             shell_enabled=bool(self.workflow_options.get("allow_shell", False)),
             approval_mode=str(self.workflow_options.get("approval_mode", "inline")),
         )
-        self._turn_active = False
-        self._active_worker = None
+        self._active_turn: ActiveTurn | None = None
+
+    @property
+    def _turn_active(self) -> bool:
+        return self._active_turn is not None
+
+    @property
+    def _active_run_id(self) -> str:
+        return self._active_turn.run_id if self._active_turn else ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -154,11 +176,12 @@ class MiniclaudeTuiApp(App):
             prompt.value = ""
             self._run_command(task)
             return
-        self._turn_active = True
+        active = ActiveTurn(uuid4().hex[:12], CancellationToken())
+        self._active_turn = active
         prompt.value = ""
         prompt.disabled = True
         self.query_one(ConversationPanel).append_user(task)
-        self._active_worker = self._run_turn(task)
+        active.worker = self._run_turn(task, active.run_id, active.cancellation)
 
     def _command_context(self) -> CommandContext:
         skills = discover_skills(self.startup_directory)
@@ -219,9 +242,16 @@ class MiniclaudeTuiApp(App):
             }
         )
 
-    def _approval_handler(self, request: ApprovalRequest) -> ApprovalDecision:
+    def _approval_handler(
+        self,
+        request: ApprovalRequest,
+        run_id: str,
+    ) -> ApprovalDecision:
         gate = self.gate_registry.create(request)
-        self.call_from_thread(self.post_message, ApprovalRequestedMessage(gate))
+        self.call_from_thread(
+            self.post_message,
+            ApprovalRequestedMessage(gate, run_id=run_id),
+        )
         decision = gate.wait()
         self.gate_registry.remove(gate)
         self.call_from_thread(
@@ -231,22 +261,35 @@ class MiniclaudeTuiApp(App):
                     "type": "approval_resolved",
                     "approval_id": request.id,
                     "approved": decision.approved,
-                }
+                },
+                run_id=run_id,
             ),
         )
         return decision
 
     @work(thread=True, exclusive=True, group="session-turn", exit_on_error=False)
-    def _run_turn(self, task: str) -> None:
+    def _run_turn(
+        self,
+        task: str,
+        run_id: str,
+        cancellation: CancellationToken,
+    ) -> None:
         worker = get_current_worker()
         options = dict(self.workflow_options)
-        options["approval_handler"] = self._approval_handler
+
+        def approval_handler(request: ApprovalRequest) -> ApprovalDecision:
+            return self._approval_handler(request, run_id)
+
+        approval_handler._renders_approval_events = True  # type: ignore[attr-defined]
+        options["approval_handler"] = approval_handler
         try:
             events_source = self.turn_stream(
                 task,
                 session=self.session,
                 startup_directory=self.startup_directory,
                 model=self.model,
+                run_id=run_id,
+                cancellation=cancellation,
                 workflow_options=options,
             )
             for event in events_source:
@@ -254,12 +297,17 @@ class MiniclaudeTuiApp(App):
                     break
                 self.call_from_thread(
                     self.post_message,
-                    AgentEventMessage(event),
+                    AgentEventMessage(event, run_id=run_id),
                 )
         finally:
-            self.call_from_thread(self.post_message, TurnCompletedMessage())
+            self.call_from_thread(
+                self.post_message,
+                TurnCompletedMessage(run_id=run_id),
+            )
 
     def on_agent_event_message(self, message: AgentEventMessage) -> None:
+        if message.run_id != self._active_run_id:
+            return
         event = message.event
         if event.get("_skip_render"):
             return
@@ -280,8 +328,12 @@ class MiniclaudeTuiApp(App):
             self.query_one(EventStream).append_event(event)
 
     def on_turn_completed_message(self, message: TurnCompletedMessage) -> None:
-        self._turn_active = False
-        self._active_worker = None
+        self._finish_run(message.run_id)
+
+    def _finish_run(self, run_id: str) -> None:
+        if self._active_turn is None or self._active_turn.run_id != run_id:
+            return
+        self._active_turn = None
         prompt = self.query_one("#prompt", Input)
         prompt.disabled = False
         prompt.focus()
@@ -290,6 +342,9 @@ class MiniclaudeTuiApp(App):
         self,
         message: ApprovalRequestedMessage,
     ) -> None:
+        if message.run_id != self._active_run_id:
+            message.gate.resolve(False, "Stale approval request")
+            return
         event = {
             "type": "approval_requested",
             "approval_id": message.gate.request.id,
@@ -297,19 +352,44 @@ class MiniclaudeTuiApp(App):
             "risk_reason": message.gate.request.risk_reason,
             "command": message.gate.request.command,
         }
-        self.on_agent_event_message(AgentEventMessage(event))
+        self.on_agent_event_message(
+            AgentEventMessage(event, run_id=message.run_id)
+        )
         self.push_screen(ApprovalModal(message.gate))
 
+    def _cancel_active_turn(self, reason: str) -> bool:
+        active = self._active_turn
+        if active is None:
+            return False
+        first = active.cancellation.cancel(reason)
+        if not first:
+            return True
+        self.view_state = reduce_session_event(
+            self.view_state,
+            {"type": "session_cancelling", "run_id": active.run_id},
+        )
+        self.query_one(SessionSidebar).update_state(self.view_state)
+        self.gate_registry.deny_all(reason)
+        if isinstance(self.screen, ApprovalModal):
+            self.screen.dismiss(False)
+        if active.worker is not None:
+            active.worker.cancel()
+        event = {
+            "type": "session_cancelled",
+            "run_id": active.run_id,
+            "reason": reason,
+        }
+        self.query_one(EventStream).append_event(event)
+        self.view_state = reduce_session_event(self.view_state, event)
+        self.query_one(SessionSidebar).update_state(self.view_state)
+        self._finish_run(active.run_id)
+        return True
+
+    def action_cancel(self) -> None:
+        self._cancel_active_turn("Escape pressed")
+
     def action_cancel_or_quit(self) -> None:
-        if self._turn_active:
-            self.gate_registry.deny_all("Session turn cancelled")
-            if self._active_worker is not None:
-                self._active_worker.cancel()
-            self.view_state = reduce_session_event(
-                self.view_state,
-                {"type": "session_cancelled"},
-            )
-            self.query_one(SessionSidebar).update_state(self.view_state)
+        if self._cancel_active_turn("Ctrl+C pressed"):
             return
         self.exit()
 
@@ -343,6 +423,11 @@ class MiniclaudeTuiApp(App):
         self.query_one(PlanPanel).toggle_class("collapsed")
 
     def on_unmount(self) -> None:
+        active = self._active_turn
+        if active is not None:
+            active.cancellation.cancel("TUI closed")
+            if active.worker is not None:
+                active.worker.cancel()
         self.gate_registry.deny_all("TUI closed")
 
 

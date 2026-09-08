@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 
 from textual.widgets import Input
 
-from miniclaude.cli.tui.app import MiniclaudeTuiApp
+from miniclaude.cli.tui.app import AgentEventMessage, MiniclaudeTuiApp
 from miniclaude.core.session import (
     append_assistant_turn,
     append_user_turn,
@@ -289,5 +290,110 @@ def test_slash_approve_changes_only_live_runtime_policy(tmp_path):
             await submit(pilot, "/approve deny")
             assert app.workflow_options["allow_shell"] is False
             assert app.workflow_options["approval_mode"] == "deny"
+
+    asyncio.run(scenario())
+
+
+def test_escape_cancels_turn_and_immediately_recovers_prompt(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_stream(task, *, cancellation, run_id, **kwargs):
+        started.set()
+        cancellation.wait(2)
+        release.wait(1)
+        yield {"type": "session_status", "status": "running"}
+
+    async def scenario():
+        app = MiniclaudeTuiApp(
+            session=create_session(tmp_path),
+            startup_directory=tmp_path,
+            turn_stream=blocking_stream,
+        )
+        async with app.run_test() as pilot:
+            await submit(pilot, "long task")
+            assert await asyncio.to_thread(started.wait, 1)
+            old_run_id = app._active_run_id
+            await pilot.press("escape")
+            await pilot.pause()
+
+            prompt = app.query_one("#prompt", Input)
+            assert app._turn_active is False
+            assert prompt.disabled is False
+            assert app.view_state.status == "idle"
+
+            app.on_agent_event_message(
+                AgentEventMessage(
+                    {"type": "session_status", "status": "running"},
+                    run_id=old_run_id,
+                )
+            )
+            assert app.view_state.status == "idle"
+            release.set()
+
+    asyncio.run(scenario())
+
+
+def test_ctrl_c_cancels_active_turn_and_repeated_cancel_is_safe(tmp_path):
+    started = threading.Event()
+
+    def blocking_stream(task, *, cancellation, **kwargs):
+        started.set()
+        cancellation.wait(2)
+        yield {"type": "session_cancelled"}
+
+    async def scenario():
+        app = MiniclaudeTuiApp(
+            session=create_session(tmp_path),
+            startup_directory=tmp_path,
+            turn_stream=blocking_stream,
+        )
+        async with app.run_test() as pilot:
+            await submit(pilot, "long task")
+            assert await asyncio.to_thread(started.wait, 1)
+            await pilot.press("ctrl+c")
+            app.action_cancel()
+            await pilot.pause()
+
+            assert app._turn_active is False
+            assert app.view_state.status == "idle"
+
+    asyncio.run(scenario())
+
+
+def test_idle_escape_is_a_noop(tmp_path):
+    async def scenario():
+        app = MiniclaudeTuiApp(
+            session=create_session(tmp_path),
+            startup_directory=tmp_path,
+            turn_stream=fake_turn_stream,
+        )
+        async with app.run_test() as pilot:
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.query_one("#prompt", Input).disabled is False
+            assert app.view_state.status == "idle"
+
+    asyncio.run(scenario())
+
+
+def test_tui_approval_handler_marks_itself_as_the_event_renderer(tmp_path):
+    captured = {}
+
+    def stream(task, *, workflow_options, cancellation, **kwargs):
+        captured["handler"] = workflow_options["approval_handler"]
+        cancellation.cancel("test complete")
+        yield {"type": "session_cancelled"}
+
+    async def scenario():
+        app = MiniclaudeTuiApp(
+            session=create_session(tmp_path),
+            startup_directory=tmp_path,
+            turn_stream=stream,
+        )
+        async with app.run_test() as pilot:
+            await submit(pilot, "inspect approval handler")
+            await pilot.pause()
+            assert captured["handler"]._renders_approval_events is True
 
     asyncio.run(scenario())

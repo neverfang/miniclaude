@@ -52,6 +52,18 @@ def test_registry_denies_every_pending_gate_on_shutdown():
     assert second.wait(0).approved is False
 
 
+def test_registry_repeated_denial_is_idempotent():
+    registry = ApprovalGateRegistry()
+    gate = registry.create(request("one"))
+
+    registry.deny_all("first cancellation")
+    registry.deny_all("second cancellation")
+
+    decision = gate.wait(0)
+    assert decision.approved is False
+    assert decision.reason == "first cancellation"
+
+
 def test_approval_is_scoped_to_one_request_only():
     registry = ApprovalGateRegistry()
     first = registry.create(request("one"))

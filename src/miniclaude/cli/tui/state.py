@@ -117,7 +117,9 @@ def reduce_session_event(
         )
     elif kind == "session_error":
         changes.update(status="failed", approval_pending=False)
+    elif kind == "session_cancelling":
+        changes.update(status="cancelling", approval_pending=False)
     elif kind == "session_cancelled":
-        changes.update(status="cancelled", approval_pending=False)
+        changes.update(status="idle", approval_pending=False)
 
     return replace(state, **changes) if changes else state

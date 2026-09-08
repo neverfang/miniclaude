@@ -92,7 +92,7 @@ class ApprovalModal(ModalScreen[bool]):
     BINDINGS = [
         ("y", "approve", "Approve"),
         ("n", "deny", "Deny"),
-        ("escape", "deny", "Deny"),
+        ("escape", "cancel_turn", "Cancel turn"),
         ("enter", "deny", "Deny"),
     ]
 
@@ -158,6 +158,14 @@ class ApprovalModal(ModalScreen[bool]):
     def action_deny(self) -> None:
         self.gate.resolve(False, "Denied in TUI")
         self.dismiss(False)
+
+    def action_cancel_turn(self) -> None:
+        self.gate.resolve(False, "Session turn cancelled")
+        cancel = getattr(self.app, "action_cancel", None)
+        if callable(cancel):
+            cancel()
+        else:
+            self.dismiss(False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "approve":
