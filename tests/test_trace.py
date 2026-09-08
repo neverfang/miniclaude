@@ -86,6 +86,23 @@ def test_trace_counts_graph_and_harness_events(tmp_path):
     assert summary["compression_count"] == 1
 
 
+def test_trace_records_cancelled_status(tmp_path):
+    recorder = _recorder(tmp_path)
+    recorder.start({"task": "build"})
+    recorder.record_custom_event(
+        {"type": "session_cancelled", "reason": "Escape pressed"}
+    )
+
+    summary = recorder.end(
+        status="cancelled",
+        latest_node="actor",
+        final_state={},
+    )
+
+    assert summary["status"] == "cancelled"
+    assert summary["cancellation_count"] == 1
+
+
 def test_trace_redacts_secrets_and_bounds_large_values(tmp_path):
     recorder = _recorder(tmp_path)
     recorder.start({})

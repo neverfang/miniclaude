@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from miniclaude.core.agent import stream_workflow_events
+from miniclaude.core.cancellation import CancellationToken
 from miniclaude.core.session import (
     SessionData,
     append_assistant_turn,
     append_user_turn,
     build_session_context,
+    mark_turn_cancelled,
     save_session,
 )
 from miniclaude.graph.entry_workflow import respond_chat, route_intent
@@ -47,24 +49,41 @@ def stream_session_turn(
     chat: Callable[..., str] = respond_chat,
     workflow_stream: Callable[..., Iterator[dict]] = stream_workflow_events,
     workflow_options: dict[str, object] | None = None,
+    run_id: str = "",
+    cancellation: CancellationToken | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Persist and stream exactly one serialized Session turn."""
 
     if not isinstance(task, str) or not task.strip():
         raise ValueError("task must not be blank")
     lock = _session_lock(session["session_id"])
-    if not lock.acquire(blocking=False):
-        yield {
-            "type": "session_error",
-            "message": "Another turn is already running for this Session.",
-        }
-        return
-
+    token = cancellation or CancellationToken()
     route = "workflow"
     turn = 0
+
+    def unregister_cancel() -> None:
+        return None
+
+    def cancelled_event() -> dict[str, object]:
+        return {
+            "type": "session_cancelled",
+            "turn": turn,
+            "run_id": run_id,
+            "reason": token.reason,
+        }
+
+    def persist_cancellation() -> None:
+        if not turn:
+            return
+        with lock:
+            if mark_turn_cancelled(session, turn, run_id, token.reason):
+                save_session(startup_directory, session)
+
     try:
-        turn = append_user_turn(session, task)
-        save_session(startup_directory, session)
+        with lock:
+            turn = append_user_turn(session, task, run_id=run_id)
+            save_session(startup_directory, session)
+        unregister_cancel = token.register(persist_cancellation)
         yield {"type": "session_status", "status": "routing", "turn": turn}
         context = build_session_context(session)
         active_skill = session.get("active_skill", "")
@@ -86,6 +105,10 @@ def stream_session_turn(
                     f"{skill.content}"
                 )[:14_000]
         decision = router(task, session_context=context, model=model)
+        if token.cancelled:
+            persist_cancellation()
+            yield cancelled_event()
+            return
         route_value = decision.get("route")
         route = route_value if route_value in {"chat", "workflow"} else "workflow"
         yield {"type": "intent_decision", **decision, "route": route}
@@ -93,6 +116,10 @@ def stream_session_turn(
         if route == "chat":
             yield {"type": "session_status", "status": "chatting", "turn": turn}
             content = chat(task, session_context=context, model=model)
+            if token.cancelled:
+                persist_cancellation()
+                yield cancelled_event()
+                return
             passed = True
             summary = content
         else:
@@ -100,6 +127,8 @@ def stream_session_turn(
             content = ""
             passed = False
             options = dict(workflow_options or {})
+            options["run_id"] = run_id
+            options["cancellation"] = token
             source = workflow_stream(
                 _workflow_task(task, context),
                 workspace=session["workspace"],
@@ -107,6 +136,10 @@ def stream_session_turn(
                 **options,
             )
             for event in source:
+                if token.cancelled:
+                    persist_cancellation()
+                    yield cancelled_event()
+                    return
                 if not isinstance(event, dict):
                     continue
                 kind = event.get("type")
@@ -130,14 +163,19 @@ def stream_session_turn(
                 )
             summary = content
 
-        append_assistant_turn(
-            session,
-            turn=turn,
-            route=route,
-            content=content,
-            summary=summary,
-        )
-        save_session(startup_directory, session)
+        if token.cancelled:
+            persist_cancellation()
+            yield cancelled_event()
+            return
+        with lock:
+            append_assistant_turn(
+                session,
+                turn=turn,
+                route=route,
+                content=content,
+                summary=summary,
+            )
+            save_session(startup_directory, session)
         yield {
             "type": "session_final",
             "turn": turn,
@@ -146,17 +184,22 @@ def stream_session_turn(
             "content": content,
         }
     except Exception as exc:
+        if token.cancelled:
+            persist_cancellation()
+            yield cancelled_event()
+            return
         message = f"Session turn failed ({type(exc).__name__})"
         if turn:
             try:
-                append_assistant_turn(
-                    session,
-                    turn=turn,
-                    route=route,
-                    content=message,
-                    summary=message,
-                )
-                save_session(startup_directory, session)
+                with lock:
+                    append_assistant_turn(
+                        session,
+                        turn=turn,
+                        route=route,
+                        content=message,
+                        summary=message,
+                    )
+                    save_session(startup_directory, session)
             except Exception:
                 pass
         yield {
@@ -166,4 +209,4 @@ def stream_session_turn(
             "message": message,
         }
     finally:
-        lock.release()
+        unregister_cancel()

@@ -13,7 +13,7 @@ from uuid import uuid4
 from miniclaude.core.paths import protected_part
 from miniclaude.core.sanitize import sanitize_for_persistence
 
-SESSION_FORMAT_VERSION = 2
+SESSION_FORMAT_VERSION = 3
 SESSION_INDEX_FORMAT_VERSION = 1
 MAX_RECENT_TURNS = 20
 MAX_TURN_CONTENT = 4_000
@@ -113,8 +113,9 @@ def _render_summary(session: SessionData) -> str:
         role = str(item["role"])
         turn = int(item["turn"])
         route = f" ({item['route']})" if item.get("route") else ""
+        status = f" [{item['status']}]" if item.get("status") else ""
         content = item.get("summary") or item["content"]
-        lines.extend((f"### Turn {turn} — {role}{route}", "", _bounded(content), ""))
+        lines.extend((f"### Turn {turn} — {role}{route}{status}", "", _bounded(content), ""))
     return _bounded("\n".join(lines), _SUMMARY_LIMIT)
 
 
@@ -198,21 +199,41 @@ def create_session(startup_directory: Path) -> SessionData:
     raise SessionError("Could not allocate a unique session id")
 
 
-def append_user_turn(session: SessionData, content: str) -> int:
+def append_user_turn(session: SessionData, content: str, *, run_id: str = "") -> int:
     if not isinstance(content, str) or not content.strip():
         raise SessionError("User turn content must not be blank")
     session["turn_index"] += 1
     turn = session["turn_index"]
-    session["recent_turns"].append(
-        {
-            "role": "user",
-            "turn": turn,
-            "content": _bounded(content),
-            "created_at": _now(),
-        }
-    )
+    item: dict[str, object] = {
+        "role": "user",
+        "turn": turn,
+        "content": _bounded(content),
+        "created_at": _now(),
+    }
+    if run_id:
+        item["run_id"] = _bounded(run_id, 64)
+    session["recent_turns"].append(item)
     session["recent_turns"] = session["recent_turns"][-MAX_RECENT_TURNS:]
     return turn
+
+
+def mark_turn_cancelled(
+    session: SessionData,
+    turn: int,
+    run_id: str,
+    reason: str,
+) -> bool:
+    """Mark one matching user turn cancelled exactly once."""
+
+    for item in reversed(session["recent_turns"]):
+        if item.get("role") == "user" and item.get("turn") == turn:
+            if item.get("run_id", "") != run_id or item.get("status") == "cancelled":
+                return False
+            item["status"] = "cancelled"
+            item["cancel_reason"] = _bounded(reason, 500)
+            item["cancelled_at"] = _now()
+            return True
+    return False
 
 
 def append_assistant_turn(
@@ -314,6 +335,8 @@ def _validate_in_memory_session(
         allowed_fields = {"role", "turn", "content", "created_at"}
         if role == "assistant":
             allowed_fields.update({"route", "summary"})
+        else:
+            allowed_fields.update({"run_id", "status", "cancel_reason", "cancelled_at"})
         if not set(item).issubset(allowed_fields) or not {
             "role",
             "turn",
@@ -342,6 +365,20 @@ def _validate_in_memory_session(
         _parse_timestamp(item["created_at"], "turn created_at")
         if role == "assistant" and item.get("route") not in _ROUTES:
             raise SessionError("Session assistant route is invalid")
+        if role == "user":
+            run_id = item.get("run_id")
+            if run_id is not None and (
+                not isinstance(run_id, str) or not run_id or len(run_id) > 64
+            ):
+                raise SessionError("Session user run id is invalid")
+            status = item.get("status")
+            if status is not None:
+                if status != "cancelled":
+                    raise SessionError("Session user status is invalid")
+                reason = item.get("cancel_reason")
+                if not isinstance(reason, str) or len(reason) > 500:
+                    raise SessionError("Session cancellation reason is invalid")
+                _parse_timestamp(item.get("cancelled_at"), "turn cancelled_at")
         summary = item.get("summary")
         if summary is not None and (
             not isinstance(summary, str) or len(summary) > MAX_TURN_CONTENT
@@ -372,10 +409,12 @@ def load_session(startup_directory: Path, session_id: str) -> SessionData:
         raise SessionError(f"Session data is unreadable ({type(exc).__name__})") from exc
     if not isinstance(raw, dict):
         raise SessionError("Session data must be an object")
-    if raw.get("format_version") == 1:
-        raw["format_version"] = SESSION_FORMAT_VERSION
+    stored_version = raw.get("format_version")
+    if stored_version == 1:
         raw["active_skill"] = ""
-    elif raw.get("format_version") != SESSION_FORMAT_VERSION:
+    if stored_version in {1, 2}:
+        raw["format_version"] = SESSION_FORMAT_VERSION
+    elif stored_version != SESSION_FORMAT_VERSION:
         raise SessionError("Unsupported Session version")
     if raw.get("workspace") != "workspace":
         raise SessionError("Session workspace record is invalid")

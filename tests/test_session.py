@@ -15,6 +15,7 @@ from miniclaude.core.session import (
     create_session,
     load_latest_session,
     load_session,
+    mark_turn_cancelled,
     save_session,
 )
 
@@ -57,6 +58,21 @@ def test_save_and_load_latest_session_with_ordered_turns(tmp_path):
     ).read_text(encoding="utf-8")
     assert "你好" in summary
     assert "chat" in summary
+
+
+def test_cancelled_user_turn_persists_without_assistant(tmp_path):
+    session = create_session(tmp_path)
+    turn = append_user_turn(session, "long request", run_id="run-one")
+
+    assert mark_turn_cancelled(session, turn, "run-one", "Escape pressed") is True
+    assert mark_turn_cancelled(session, turn, "run-one", "again") is False
+    save_session(tmp_path, session)
+
+    loaded = load_session(tmp_path, session["session_id"])
+    assert loaded["recent_turns"][-1]["role"] == "user"
+    assert loaded["recent_turns"][-1]["status"] == "cancelled"
+    assert loaded["recent_turns"][-1]["run_id"] == "run-one"
+    assert not any(item["role"] == "assistant" for item in loaded["recent_turns"])
 
 
 def test_continue_without_history_is_an_actionable_error(tmp_path):

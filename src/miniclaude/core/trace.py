@@ -26,6 +26,7 @@ class TraceStats:
     checkpoint_count: int = 0
     handoff_count: int = 0
     compression_count: int = 0
+    cancellation_count: int = 0
 
 
 def _utc_now() -> datetime:
@@ -177,6 +178,8 @@ class TraceRecorder:
             self.stats.handoff_count += 1
         elif event_type == "context_compressor":
             self.stats.compression_count += 1
+        elif event_type == "session_cancelled":
+            self.stats.cancellation_count += 1
         self._append(event)
 
     def record_graph_update(self, event: Mapping[str, object]) -> None:

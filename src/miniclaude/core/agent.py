@@ -9,6 +9,7 @@ from typing import Protocol
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
+from miniclaude.core.cancellation import CancellationToken, TurnCancelled
 from miniclaude.core.prompts import ACTOR_PROMPT
 from miniclaude.core.state import RuntimeState
 from miniclaude.providers.openai_provider import create_model
@@ -202,6 +203,8 @@ def stream_workflow_events(
     resume_workspace: Path | None = None,
     restore_workspace: bool = False,
     harness_factory=None,
+    run_id: str = "",
+    cancellation: CancellationToken | None = None,
 ) -> Iterator[dict]:
     """Build and stream the Stage 4 workflow through the Stage 5 harness."""
     if restore_workspace and resume_workspace is None:
@@ -223,6 +226,7 @@ def stream_workflow_events(
     from miniclaude.tools.web_search_tool import build_web_search_tool
 
     configured_model = create_model(env_file=env_file) if model is None else model
+    token = cancellation or CancellationToken()
     runtime = RuntimeState(
         workspace=workspace,
         allow_shell=allow_shell,
@@ -230,6 +234,8 @@ def stream_workflow_events(
         approval_handler=approval_handler,
         checkpoint_mode=checkpoint_mode,
         trace_mode=trace_mode,
+        run_id=run_id,
+        cancellation=token,
     )
     resume_event = None
     if resume_workspace is not None:
@@ -268,22 +274,42 @@ def stream_workflow_events(
     completed_attempts = int(state.get("attempts", 0))
     last_passed = False
     latest_node = "start"
+    cancellation_summaries: list[dict[str, object]] = []
+
+    def finalize_cancellation() -> None:
+        summary = harness.cancel(
+            latest_node=latest_node,
+            reason=runtime.cancellation.reason,
+        )
+        if summary is not None:
+            cancellation_summaries.append(summary)
+
+    unregister_cancel = runtime.cancellation.register(finalize_cancellation)
 
     def harnessed_stream():
         try:
+            runtime.cancellation.checkpoint()
             yield from compiled.stream(
                 state,
                 stream_mode=["updates", "custom"],
                 config={"recursion_limit": max_attempts * 6 + 12},
             )
+        except TurnCancelled:
+            return
         except KeyboardInterrupt:
             harness.interrupt(latest_node=latest_node, state=state)
             raise
         except BaseException:
             harness.fail(latest_node=latest_node, state=state)
             raise
+        finally:
+            unregister_cancel()
 
     for mode, chunk in harnessed_stream():
+        if runtime.cancellation.cancelled:
+            yield from harness.drain_runtime_events()
+            yield from cancellation_summaries
+            return
         yield from harness.drain_runtime_events()
         if mode == "custom":
             kind = chunk.get("type")
@@ -383,6 +409,10 @@ def stream_workflow_events(
                 }
             yield from harness.record_graph_update(node, update, state)
 
+    if runtime.cancellation.cancelled:
+        yield from harness.drain_runtime_events()
+        yield from cancellation_summaries
+        return
     summary = harness.finish(
         status="passed" if last_passed else "failed",
         latest_node=latest_node,

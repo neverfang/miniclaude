@@ -1,4 +1,5 @@
 from miniclaude.core.agent import stream_workflow_events
+from miniclaude.core.cancellation import CancellationToken
 
 
 class PassingWorkflow:
@@ -81,6 +82,61 @@ def test_stage_five_stream_passes_runtime_policies_to_tools(tmp_path):
     assert captured["runtime"].approval_mode == "deny"
     assert captured["runtime"].checkpoint_mode == "off"
     assert captured["runtime"].trace_mode == "off"
+
+
+def test_stage_five_cancellation_uses_shared_token_and_omits_final(tmp_path):
+    token = CancellationToken()
+    captured = {}
+
+    class CancellingWorkflow:
+        def stream(self, state, **kwargs):
+            captured["runtime"] = state["runtime"]
+            token.cancel("Escape pressed")
+            yield "updates", {"final": {"final_answer": "stale answer"}}
+
+    events = list(
+        stream_workflow_events(
+            "build",
+            workspace=tmp_path,
+            model=object(),
+            workflow=CancellingWorkflow(),
+            checkpoint_mode="light",
+            trace_mode="on",
+            run_id="run-one",
+            cancellation=token,
+        )
+    )
+
+    assert captured["runtime"].cancellation is token
+    assert captured["runtime"].run_id == "run-one"
+    assert not any(event["type"] == "final" for event in events)
+    summary = next(event for event in events if event["type"] == "trace_summary")
+    assert summary["status"] == "cancelled"
+
+
+def test_stage_five_precancelled_token_never_enters_workflow(tmp_path):
+    token = CancellationToken()
+    token.cancel("Ctrl+C pressed")
+
+    class MustNotRunWorkflow:
+        def stream(self, state, **kwargs):
+            raise AssertionError("cancelled workflow must not start")
+            yield
+
+    events = list(
+        stream_workflow_events(
+            "build",
+            workspace=tmp_path,
+            model=object(),
+            workflow=MustNotRunWorkflow(),
+            checkpoint_mode="light",
+            trace_mode="on",
+            cancellation=token,
+        )
+    )
+
+    summary = next(event for event in events if event["type"] == "trace_summary")
+    assert summary["status"] == "cancelled"
 
 
 def test_stage_five_interrupt_finalizes_harness(tmp_path):

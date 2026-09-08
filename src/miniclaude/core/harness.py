@@ -1,10 +1,21 @@
 """Lifecycle coordination for Stage 5 checkpoints, traces, and approvals."""
 
+import threading
 from collections.abc import Mapping
+from functools import wraps
 
 from miniclaude.core.checkpoint import CheckpointManager
 from miniclaude.core.state import RuntimeState
 from miniclaude.core.trace import TraceRecorder
+
+
+def _synchronized(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._lifecycle_lock:
+            return method(self, *args, **kwargs)
+
+    return wrapped
 
 
 class HarnessRunner:
@@ -30,6 +41,7 @@ class HarnessRunner:
         self._state: Mapping[str, object] = {}
         self._runtime_events: list[dict[str, object]] = []
         self._finished = False
+        self._lifecycle_lock = threading.RLock()
 
     @staticmethod
     def _warning(kind: str, exc: Exception) -> dict[str, str]:
@@ -83,6 +95,7 @@ class HarnessRunner:
             events.extend(self._record_trace_event(warning))
         return events
 
+    @_synchronized
     def start(self, state: Mapping[str, object]) -> list[dict[str, object]]:
         self._state = state
         events: list[dict[str, object]] = []
@@ -99,6 +112,7 @@ class HarnessRunner:
         events.extend(self._save_checkpoint(status="started", latest_node="start"))
         return events
 
+    @_synchronized
     def record_custom_event(
         self,
         event: Mapping[str, object],
@@ -117,15 +131,18 @@ class HarnessRunner:
             events.extend(self._save_checkpoint(status="running", latest_node=node, event=event))
         return events
 
+    @_synchronized
     def record_runtime_event(self, event: dict[str, object]) -> None:
         self._runtime_events.append(event)
         self._runtime_events.extend(self.record_custom_event(event))
 
+    @_synchronized
     def drain_runtime_events(self) -> list[dict[str, object]]:
         events = self._runtime_events
         self._runtime_events = []
         return events
 
+    @_synchronized
     def record_graph_update(
         self,
         node: str,
@@ -146,6 +163,7 @@ class HarnessRunner:
         events.extend(self._save_checkpoint(status="running", latest_node=node, event=graph_event))
         return events
 
+    @_synchronized
     def finish(
         self,
         *,
@@ -173,6 +191,25 @@ class HarnessRunner:
         if summary is None:
             return None
         return {"type": "trace_summary", **summary}
+
+    @_synchronized
+    def cancel(
+        self,
+        *,
+        latest_node: str,
+        reason: str,
+    ) -> dict[str, object] | None:
+        if self._finished:
+            return None
+        self.record_custom_event(
+            {"type": "session_cancelled", "reason": str(reason)[:500]},
+            self._state,
+        )
+        return self.finish(
+            status="cancelled",
+            latest_node=latest_node,
+            state=self._state,
+        )
 
     def interrupt(self, *, latest_node: str, state: Mapping[str, object]) -> None:
         self.finish(status="interrupted", latest_node=latest_node, state=state)

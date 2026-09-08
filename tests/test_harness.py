@@ -163,3 +163,22 @@ def test_harness_finish_is_idempotent(tmp_path):
     assert first["type"] == "trace_summary"
     assert second is None
     assert calls.count("trace.end.passed") == 1
+
+
+def test_harness_cancel_is_idempotent(tmp_path):
+    calls = []
+    harness = HarnessRunner(
+        RuntimeState(tmp_path),
+        task="build",
+        checkpoint=FakeCheckpoint(calls),
+        trace=FakeTrace(calls),
+    )
+    harness.start({"task": "build", "passed": False})
+
+    first = harness.cancel(latest_node="actor", reason="Escape pressed")
+    second = harness.cancel(latest_node="actor", reason="again")
+
+    assert first["type"] == "trace_summary"
+    assert first["status"] == "cancelled"
+    assert second is None
+    assert calls.count("trace.end.cancelled") == 1
